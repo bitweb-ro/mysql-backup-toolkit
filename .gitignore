@@ -28,3 +28,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Claude Code project instructions (local only, not shared)
+CLAUDE.md
