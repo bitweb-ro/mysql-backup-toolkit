@@ -231,6 +231,7 @@ function BackupRow({ backup: b, connectionId, onDelete, onShowLogs }: {
 }) {
   const fileName = b.file_path ? b.file_path.split('/').pop() || '' : '';
   const hasLogs = !!(b.logs && b.logs.trim());
+  const [downloading, setDownloading] = useState(false);
 
   return (
     <tr>
@@ -256,12 +257,20 @@ function BackupRow({ backup: b, connectionId, onDelete, onShowLogs }: {
           <button
             className="btn btn-secondary btn-sm"
             title="Descarcă fișier backup"
-            onClick={() => {
+            disabled={downloading}
+            onClick={async () => {
               const fileName = b.file_path!.split('/').pop() || 'backup.sql.gz';
-              api.downloadBackup(connectionId, b.id, fileName);
+              setDownloading(true);
+              try {
+                await api.downloadBackup(connectionId, b.id, fileName);
+              } catch (e) {
+                console.error(e);
+              } finally {
+                setDownloading(false);
+              }
             }}
           >
-            ↓
+            {downloading ? '…' : '↓'}
           </button>
         )}
         {b.status !== 'running' && (

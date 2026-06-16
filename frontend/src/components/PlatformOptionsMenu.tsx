@@ -21,10 +21,18 @@ export default function PlatformOptionsMenu() {
 
 function PlatformOptionsModal({ onClose }: { onClose: () => void }) {
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [exporting, setExporting] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
 
-  const handleExport = () => {
-    api.exportConfig().catch(e => setAlert({ type: 'error', msg: e.message }));
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      await api.exportConfig();
+    } catch (e) {
+      setAlert({ type: 'error', msg: e instanceof Error ? e.message : 'Eroare la export' });
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -56,8 +64,8 @@ function PlatformOptionsModal({ onClose }: { onClose: () => void }) {
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <button className="btn btn-secondary" style={{ justifyContent: 'flex-start' }} onClick={handleExport}>
-            ↑ Exportă configurațiile serverelor
+          <button className="btn btn-secondary" style={{ justifyContent: 'flex-start' }} onClick={handleExport} disabled={exporting}>
+            {exporting ? '… Se exportă' : '↑ Exportă configurațiile serverelor'}
           </button>
           <label className="btn btn-secondary" style={{ justifyContent: 'flex-start', cursor: 'pointer' }}>
             ↓ Importă configurații servere din JSON

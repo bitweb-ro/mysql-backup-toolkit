@@ -170,7 +170,7 @@ body {
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
-.conn-card:hover { border-color: var(--border2); background: var(--bg3); }
+.conn-card:hover { border-color: var(--border2); background: var(--bg); }
 .conn-card.selected { border-color: var(--accent); }
 
 .conn-card-top {
