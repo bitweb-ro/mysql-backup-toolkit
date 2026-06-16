@@ -314,8 +314,32 @@ tr:hover td { background: var(--bg3); }
   border-radius: var(--radius-lg);
   width: 100%;
   max-width: 480px;
+  max-height: calc(100vh - 40px);
   padding: 24px;
+  overflow-y: auto;
 }
+
+.accordion {
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.accordion-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--bg3, rgba(255,255,255,0.03));
+}
+
+.accordion-header:hover { background: var(--bg3-hover, rgba(255,255,255,0.06)); }
+
+.accordion-body { padding: 12px; }
 
 .modal-header {
   display: flex;

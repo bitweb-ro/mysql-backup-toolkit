@@ -39,6 +39,7 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
       : { ...defaultForm },
   );
   const [error, setError] = useState("");
+  const [privOpen, setPrivOpen] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [validating, setValidating] = useState(false);
@@ -200,77 +201,87 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
           />
         </div>
 
-        <div className="validation-panel" style={{ marginBottom: 12 }}>
-          <div className="validation-title">Privilegii MySQL necesare</div>
-          <div style={{ fontSize: 12, color: "var(--text3)", lineHeight: 1.6 }}>
-            <strong>Backup full:</strong> SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER, RELOAD
-            <br />
-            <strong>Backup incremental:</strong> toate cele de mai sus + REPLICATION CLIENT
-            (necesar pentru SHOW BINARY LOG STATUS / MASTER STATUS) — binary logging
-            (<span className="mono">log_bin</span>) trebuie să fie activ pe server.
-          </div>
+        <div className="accordion">
           <div
-            className="alert error"
-            style={{ marginTop: 8, padding: "6px 10px", fontSize: 12 }}
+            className="accordion-header"
+            onClick={() => setPrivOpen((v) => !v)}
           >
-            Ai nevoie de un utilizator MySQL — aplicația nu creează
-            utilizatori, doar îi folosește. Rulează comenzile de mai jos pe
-            server-ul MySQL, ca un cont cu privilegiu GRANT (ex: root/admin),
-            înlocuind utilizatorul și parola cu cele reale.
+            <span>🔑 Privilegii MySQL necesare</span>
+            <span>{privOpen ? "▲" : "▼"}</span>
           </div>
-          <div style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}>
-            <strong>Pas 1 — creează utilizatorul</strong> (omite dacă există deja):
-          </div>
-          <pre
-            className="mono"
-            style={{
-              marginTop: 4,
-              padding: "8px 10px",
-              background: "var(--bg2, #1a1a1a)",
-              borderRadius: 6,
-              fontSize: 12,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-all",
-            }}
-          >
-            {`CREATE USER \`${form.user || "utilizator"}\`@\`%\` IDENTIFIED BY 'parola_aici';`}
-          </pre>
-          <div style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}>
-            <strong>Pas 2 — acordă drepturile pe baza de date</strong>:
-          </div>
-          <pre
-            className="mono"
-            style={{
-              marginTop: 4,
-              padding: "8px 10px",
-              background: "var(--bg2, #1a1a1a)",
-              borderRadius: 6,
-              fontSize: 12,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-all",
-            }}
-          >
-            {`GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER ON \`${form.database_name || "baza_de_date"}\`.* TO \`${form.user || "utilizator"}\`@\`%\`;`}
-          </pre>
-          <div style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}>
-            <strong>Pas 3 — drepturi globale</strong> (RELOAD și REPLICATION
-            CLIENT sunt privilegii administrative, nu se pot da pe o singură
-            bază de date — necesită <span className="mono">ON *.*</span>):
-          </div>
-          <pre
-            className="mono"
-            style={{
-              marginTop: 4,
-              padding: "8px 10px",
-              background: "var(--bg2, #1a1a1a)",
-              borderRadius: 6,
-              fontSize: 12,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-all",
-            }}
-          >
-            {`GRANT RELOAD, REPLICATION CLIENT ON *.* TO \`${form.user || "utilizator"}\`@\`%\`;\nFLUSH PRIVILEGES;`}
-          </pre>
+          {privOpen && (
+            <div className="accordion-body">
+              <div style={{ fontSize: 12, color: "var(--text3)", lineHeight: 1.6 }}>
+                <strong>Backup full:</strong> SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER, RELOAD
+                <br />
+                <strong>Backup incremental:</strong> toate cele de mai sus + REPLICATION CLIENT
+                (necesar pentru SHOW BINARY LOG STATUS / MASTER STATUS) — binary logging
+                (<span className="mono">log_bin</span>) trebuie să fie activ pe server.
+              </div>
+              <div
+                className="alert error"
+                style={{ marginTop: 8, padding: "6px 10px", fontSize: 12 }}
+              >
+                Ai nevoie de un utilizator MySQL — aplicația nu creează
+                utilizatori, doar îi folosește. Rulează comenzile de mai jos pe
+                server-ul MySQL, ca un cont cu privilegiu GRANT (ex: root/admin),
+                înlocuind utilizatorul și parola cu cele reale.
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}>
+                <strong>Pas 1 — creează utilizatorul</strong> (omite dacă există deja):
+              </div>
+              <pre
+                className="mono"
+                style={{
+                  marginTop: 4,
+                  padding: "8px 10px",
+                  background: "var(--bg2, #1a1a1a)",
+                  borderRadius: 6,
+                  fontSize: 12,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                }}
+              >
+                {`CREATE USER \`${form.user || "utilizator"}\`@\`%\` IDENTIFIED BY 'parola_aici';`}
+              </pre>
+              <div style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}>
+                <strong>Pas 2 — acordă drepturile pe baza de date</strong>:
+              </div>
+              <pre
+                className="mono"
+                style={{
+                  marginTop: 4,
+                  padding: "8px 10px",
+                  background: "var(--bg2, #1a1a1a)",
+                  borderRadius: 6,
+                  fontSize: 12,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                }}
+              >
+                {`GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER ON \`${form.database_name || "baza_de_date"}\`.* TO \`${form.user || "utilizator"}\`@\`%\`;`}
+              </pre>
+              <div style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}>
+                <strong>Pas 3 — drepturi globale</strong> (RELOAD și REPLICATION
+                CLIENT sunt privilegii administrative, nu se pot da pe o singură
+                bază de date — necesită <span className="mono">ON *.*</span>):
+              </div>
+              <pre
+                className="mono"
+                style={{
+                  marginTop: 4,
+                  padding: "8px 10px",
+                  background: "var(--bg2, #1a1a1a)",
+                  borderRadius: 6,
+                  fontSize: 12,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                }}
+              >
+                {`GRANT RELOAD, REPLICATION CLIENT ON *.* TO \`${form.user || "utilizator"}\`@\`%\`;\nFLUSH PRIVILEGES;`}
+              </pre>
+            </div>
+          )}
         </div>
 
         {/* Validation results */}
