@@ -1,0 +1,78 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-backup-db-dev
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-testdb}
+      MYSQL_USER: ${MYSQL_USER:-backupuser}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-backuppassword}
+    ports:
+      - "${PORT_APP_MYSQL:-3306}:3306"
+    volumes:
+      - mysql_dev_data:/var/lib/mysql
+      - ./mysql-config:/etc/mysql/conf.d
+    command: >
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --server-id=1
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+      --expire-logs-days=7
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      target: dev
+    platform: linux/amd64
+    container_name: mysql-backup-backend-dev
+    restart: unless-stopped
+    working_dir: /app/backend
+    command: sh -c "npm install && npm run dev"
+    environment:
+      APP_USER: ${APP_USER:-admin}
+      APP_PASSWORD: ${APP_PASSWORD:-secret}
+      JWT_SECRET: ${JWT_SECRET:-mysql-backup-manager-secret-key}
+      PORT: 3001
+      NODE_ENV: development
+    ports:
+      - "${PORT_APP_BACKEND:-3001}:3001"
+    volumes:
+      - ./backend:/app/backend
+      - ./.env:/app/.env:ro
+      - backend_modules:/app/backend/node_modules
+      - app_dev_data:/app/backend/data
+      - ${BACKUP_PATH:-./backup_servers}:/app/backup_servers
+      - mysql_dev_data:/var/lib/mysql:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  frontend:
+    image: node:20-bookworm-slim
+    container_name: mysql-backup-frontend-dev
+    restart: unless-stopped
+    working_dir: /app/frontend
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    environment:
+      NODE_ENV: development
+      VITE_API_PROXY_TARGET: http://backend:3001
+    ports:
+      - "${PORT_APP_FRONTEND:-3000}:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app/frontend
+      - frontend_modules:/app/frontend/node_modules
+
+volumes:
+  mysql_dev_data:
+  app_dev_data:
+  backend_modules:
+  frontend_modules:

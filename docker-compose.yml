@@ -1,0 +1,78 @@
+services:
+  # Server MySQL local — opțional, doar pentru testare. Nu e necesar dacă
+  # aplicația backup-uiește exclusiv servere MySQL externe. Se pornește doar
+  # explicit cu: docker-compose --profile local-mysql up
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-backup-db
+    restart: unless-stopped
+    profiles: ["local-mysql"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-testdb}
+      MYSQL_USER: ${MYSQL_USER:-backupuser}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-backuppassword}
+    ports:
+      - "${PORT_APP_MYSQL:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-config:/etc/mysql/conf.d
+    command: >
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --server-id=1
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+      --expire-logs-days=7
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-p${MYSQL_ROOT_PASSWORD:-rootpassword}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    platform: linux/amd64
+    container_name: mysql-backup-app
+    restart: unless-stopped
+    ports:
+      - "${PORT_APP_BACKEND:-3001}:3001"
+    environment:
+      APP_USER: ${APP_USER:-admin}
+      APP_PASSWORD: ${APP_PASSWORD:-secret}
+      JWT_SECRET: ${JWT_SECRET:-mysql-backup-manager-secret-key}
+      PORT: 3001
+    volumes:
+      - app_data:/app/backend/data
+      - ${BACKUP_PATH:-./backup_servers}:/app/backup_servers
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:3001/api/auth/login",
+          "-X",
+          "POST",
+          "-H",
+          "Content-Type: application/json",
+          "-d",
+          "{}",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  mysql_data:
+  app_data:

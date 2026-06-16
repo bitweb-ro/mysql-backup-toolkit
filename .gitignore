@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+frontend/dist/
+backend/dist/
+
+# Environment files (contain secrets)
+.env
+**/.env.local
+**/.env.production
+
+# Database & backups (runtime data)
+backend/data/
+data/
+backup_servers/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
