@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import { Connection } from '../types';
+import { Connection, ValidationResult } from '../types';
+import ValidationPanel from './ValidationPanel';
 
 export default function ServerOptionsMenu({ conn }: { conn: Connection }) {
   const [showModal, setShowModal] = useState(false);
@@ -26,28 +27,78 @@ export default function ServerOptionsMenu({ conn }: { conn: Connection }) {
 }
 
 function ServerOptionsModal({ conn, onClose }: { conn: Connection; onClose: () => void }) {
-  const [view, setView] = useState<'menu' | 'delete'>('menu');
+  const [view, setView] = useState<'menu' | 'delete' | 'privileges'>('menu');
   const navigate = useNavigate();
+
+  const titles: Record<typeof view, string> = {
+    menu: 'Opțiuni server',
+    delete: 'Șterge server',
+    privileges: 'Testează drepturile',
+  };
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <span className="modal-title">{view === 'menu' ? 'Opțiuni server' : 'Șterge server'}</span>
+          <span className="modal-title">{titles[view]}</span>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
 
-        {view === 'menu' ? (
+        {view === 'menu' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button className="btn btn-secondary" style={{ justifyContent: 'flex-start' }} onClick={() => setView('privileges')}>
+              🔍 Testează drepturile
+            </button>
             <button className="btn btn-danger" style={{ justifyContent: 'flex-start' }} onClick={() => setView('delete')}>
               Șterge acest server
             </button>
           </div>
-        ) : (
+        )}
+        {view === 'delete' && (
           <DeleteServerForm conn={conn} onBack={() => setView('menu')} onDeleted={() => { onClose(); navigate('/'); }} />
+        )}
+        {view === 'privileges' && (
+          <TestPrivilegesForm conn={conn} onBack={() => setView('menu')} />
         )}
       </div>
     </div>
+  );
+}
+
+function TestPrivilegesForm({ conn, onBack }: { conn: Connection; onBack: () => void }) {
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [error, setError] = useState('');
+
+  const runTest = async () => {
+    setValidating(true);
+    setError('');
+    try {
+      const r = await api.validateConnection(conn.id);
+      setValidation(r);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Eroare la testare');
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  useEffect(() => {
+    runTest();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <>
+      {error && <div className="alert error" style={{ marginBottom: 12 }}>{error}</div>}
+      <ValidationPanel validation={validation} validating={validating} />
+      <div className="form-actions">
+        <button className="btn btn-ghost" onClick={onBack}>Înapoi</button>
+        <button className="btn btn-secondary" onClick={runTest} disabled={validating}>
+          {validating ? <span className="spinner" /> : '🔄'} Retestează
+        </button>
+      </div>
+    </>
   );
 }
 
