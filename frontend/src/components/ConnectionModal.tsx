@@ -89,6 +89,26 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
     }
   };
 
+  const handleTestPrivileges = async () => {
+    if (!form.host || !form.user || !form.password || !form.database_name) {
+      setError(
+        "Completează host, user, parolă și baza de date pentru a testa.",
+      );
+      return;
+    }
+    setError("");
+    setValidating(true);
+    try {
+      const r = await api.testCredentials(form);
+      setValidation(r);
+    } catch (e: unknown) {
+      setValidation(null);
+      setError(e instanceof Error ? e.message : "Eroare la testare");
+    } finally {
+      setValidating(false);
+    }
+  };
+
   const handleSave = async () => {
     if (
       !form.name ||
@@ -211,12 +231,17 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
           </div>
           {privOpen && (
             <div className="accordion-body">
-              <div style={{ fontSize: 12, color: "var(--text3)", lineHeight: 1.6 }}>
-                <strong>Backup full:</strong> SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER, RELOAD
+              <div
+                style={{ fontSize: 12, color: "var(--text3)", lineHeight: 1.6 }}
+              >
+                <strong>Backup full:</strong> SELECT, LOCK TABLES, SHOW VIEW,
+                EVENT, TRIGGER, RELOAD
                 <br />
-                <strong>Backup incremental:</strong> toate cele de mai sus + REPLICATION CLIENT
-                (necesar pentru SHOW BINARY LOG STATUS / MASTER STATUS) — binary logging
-                (<span className="mono">log_bin</span>) trebuie să fie activ pe server.
+                <strong>Backup incremental:</strong> toate cele de mai sus +
+                REPLICATION CLIENT (necesar pentru SHOW BINARY LOG STATUS /
+                MASTER STATUS) — binary logging (
+                <span className="mono">log_bin</span>) trebuie să fie activ pe
+                server.
               </div>
               <div
                 className="alert error"
@@ -224,11 +249,14 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
               >
                 Ai nevoie de un utilizator MySQL — aplicația nu creează
                 utilizatori, doar îi folosește. Rulează comenzile de mai jos pe
-                server-ul MySQL, ca un cont cu privilegiu GRANT (ex: root/admin),
-                înlocuind utilizatorul și parola cu cele reale.
+                server-ul MySQL, ca un cont cu privilegiu GRANT (ex:
+                root/admin), înlocuind utilizatorul și parola cu cele reale.
               </div>
-              <div style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}>
-                <strong>Pas 1 — creează utilizatorul</strong> (omite dacă există deja):
+              <div
+                style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}
+              >
+                <strong>Pas 1 — creează utilizatorul</strong> (omite dacă există
+                deja):
               </div>
               <pre
                 className="mono"
@@ -244,7 +272,9 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
               >
                 {`CREATE USER \`${form.user || "utilizator"}\`@\`%\` IDENTIFIED BY 'parola_aici';`}
               </pre>
-              <div style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}>
+              <div
+                style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}
+              >
                 <strong>Pas 2 — acordă drepturile pe baza de date</strong>:
               </div>
               <pre
@@ -261,7 +291,9 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
               >
                 {`GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER ON \`${form.database_name || "baza_de_date"}\`.* TO \`${form.user || "utilizator"}\`@\`%\`;`}
               </pre>
-              <div style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}>
+              <div
+                style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}
+              >
                 <strong>Pas 3 — drepturi globale</strong> (RELOAD și REPLICATION
                 CLIENT sunt privilegii administrative, nu se pot da pe o singură
                 bază de date — necesită <span className="mono">ON *.*</span>):
@@ -354,6 +386,13 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
         )}
 
         <div className="form-actions">
+          <button
+            className="btn btn-secondary"
+            onClick={handleTestPrivileges}
+            disabled={validating}
+          >
+            {validating ? <span className="spinner" /> : ""} Testează drepturile
+          </button>
           {savedConn && (
             <>
               <button

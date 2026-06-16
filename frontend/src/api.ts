@@ -75,6 +75,8 @@ export const api = {
     req<{ success: boolean; message: string }>(`/connections/${id}/test`, { method: 'POST' }),
   validateConnection: (id: string) =>
     req<import('./types').ValidationResult>(`/connections/${id}/validate`, { method: 'POST' }),
+  testCredentials: (data: { host: string; port: number; user: string; password: string; database_name: string }) =>
+    req<import('./types').ValidationResult>('/connections/test-credentials', { method: 'POST', body: JSON.stringify(data) }),
 
   getBackups: (connectionId: string) =>
     req<import('./types').BackupListResponse>(`/connections/${connectionId}/backups`),

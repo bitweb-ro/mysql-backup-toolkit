@@ -115,6 +115,17 @@ router.post('/:id/validate', async (req: Request, res: Response) => {
   res.json(result);
 });
 
+// Validate raw credentials before saving (no connection record needed yet)
+router.post('/test-credentials', async (req: Request, res: Response) => {
+  const { host, port, user, password, database_name } = req.body;
+  if (!host || !user || !password || !database_name) {
+    return res.status(400).json({ error: 'Completează host, user, parolă și baza de date.' });
+  }
+  const conn = { host, port: port || 3306, user, password, database_name } as Connection;
+  const result = await validateMySQLCapabilities(conn);
+  res.json(result);
+});
+
 // Export all connections config (with passwords) as JSON
 router.get('/export/config', (_req: Request, res: Response) => {
   const db = getDb();
