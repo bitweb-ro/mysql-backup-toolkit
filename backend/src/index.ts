@@ -39,7 +39,7 @@ if (process.env.NODE_ENV === 'production') {
 
 app.listen(PORT, () => {
   console.log(`MySQL Backup Manager running on port ${PORT}`);
-  console.log(`Backup storage: ${path.join(process.cwd(), 'backup_servers')}`);
+  console.log(`Backup storage: ${path.join(process.cwd(), '..', 'backup_servers')}`);
 });
 
 export default app;

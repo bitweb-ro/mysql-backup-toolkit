@@ -6,7 +6,10 @@ import { Connection, BackupResult, BinlogInfo } from '../types';
 
 const execAsync = promisify(exec);
 
-const BACKUP_ROOT = path.join(process.cwd(), 'backup_servers');
+// process.cwd() is always backend/ (set by WORKDIR/working_dir in the
+// Dockerfile and docker-compose files), while the BACKUP_PATH volume is
+// mounted one level up, at <project-root>/backup_servers.
+const BACKUP_ROOT = path.join(process.cwd(), '..', 'backup_servers');
 
 // In-memory log buffer for running operations
 const opLogs = new Map<string, string[]>();
