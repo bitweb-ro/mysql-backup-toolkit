@@ -67,7 +67,7 @@ export default function Sidebar({ onLogout }: { onLogout: () => void }) {
         </div>
 
         {stats.length > 0 && (
-          <div className="sidebar-section" style={{ flex: 1 }}>
+          <div className="sidebar-section" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
             <div className="sidebar-section-label">Servere ({stats.length})</div>
             {stats.map(s => {
               const expanded = expandedId === s.connection.id;

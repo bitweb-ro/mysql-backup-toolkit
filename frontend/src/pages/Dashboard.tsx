@@ -10,6 +10,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStat[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [search, setSearch] = useState('');
   const navigate = useNavigate();
 
   const load = useCallback(async () => {
@@ -37,6 +38,14 @@ export default function Dashboard() {
     );
   }
 
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? stats.filter(s => {
+        const c = s.connection;
+        return [c.name, c.host, c.database_name, c.user].some(v => v.toLowerCase().includes(q));
+      })
+    : stats;
+
   return (
     <>
       <div className="page-header">
@@ -46,6 +55,15 @@ export default function Dashboard() {
             <p>Vizualizare generală a tuturor serverelor MySQL</p>
           </div>
           <div className="page-actions">
+            {stats.length > 0 && (
+              <input
+                type="search"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="🔍 Caută server…"
+                style={{ minWidth: 220 }}
+              />
+            )}
             <button className="btn btn-primary" onClick={() => setShowModal(true)}>
               + Adaugă server
             </button>
@@ -64,9 +82,13 @@ export default function Dashboard() {
               + Adaugă server
             </button>
           </div>
+        ) : filtered.length === 0 ? (
+          <div className="empty">
+            <p>Niciun server nu corespunde căutării „{search.trim()}".</p>
+          </div>
         ) : (
           <div className="conn-grid">
-            {stats.map(s => (
+            {filtered.map(s => (
               <DashboardCard key={s.connection.id} stat={s} onChanged={load} />
             ))}
           </div>
