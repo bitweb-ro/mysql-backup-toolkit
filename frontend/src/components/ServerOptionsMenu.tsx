@@ -4,7 +4,7 @@ import { api } from '../api';
 import { Connection, ValidationResult } from '../types';
 import ValidationPanel from './ValidationPanel';
 
-export default function ServerOptionsMenu({ conn }: { conn: Connection }) {
+export default function ServerOptionsMenu({ conn, onDeleted }: { conn: Connection; onDeleted?: () => void }) {
   const [showModal, setShowModal] = useState(false);
 
   return (
@@ -21,12 +21,12 @@ export default function ServerOptionsMenu({ conn }: { conn: Connection }) {
         </svg>
       </button>
 
-      {showModal && <ServerOptionsModal conn={conn} onClose={() => setShowModal(false)} />}
+      {showModal && <ServerOptionsModal conn={conn} onClose={() => setShowModal(false)} onDeleted={onDeleted} />}
     </>
   );
 }
 
-function ServerOptionsModal({ conn, onClose }: { conn: Connection; onClose: () => void }) {
+function ServerOptionsModal({ conn, onClose, onDeleted }: { conn: Connection; onClose: () => void; onDeleted?: () => void }) {
   const [view, setView] = useState<'menu' | 'delete' | 'privileges'>('menu');
   const navigate = useNavigate();
 
@@ -55,7 +55,7 @@ function ServerOptionsModal({ conn, onClose }: { conn: Connection; onClose: () =
           </div>
         )}
         {view === 'delete' && (
-          <DeleteServerForm conn={conn} onBack={() => setView('menu')} onDeleted={() => { onClose(); navigate('/'); }} />
+          <DeleteServerForm conn={conn} onBack={() => setView('menu')} onDeleted={() => { onClose(); if (onDeleted) onDeleted(); else navigate('/'); }} />
         )}
         {view === 'privileges' && (
           <TestPrivilegesForm conn={conn} onBack={() => setView('menu')} />

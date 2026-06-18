@@ -4,6 +4,7 @@ import { api } from '../api';
 import { DashboardStat, Connection } from '../types';
 import { formatRelative, formatTime } from '../utils';
 import ConnectionModal from '../components/ConnectionModal';
+import ServerOptionsMenu from '../components/ServerOptionsMenu';
 
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStat[]>([]);
@@ -66,7 +67,7 @@ export default function Dashboard() {
         ) : (
           <div className="conn-grid">
             {stats.map(s => (
-              <DashboardCard key={s.connection.id} stat={s} />
+              <DashboardCard key={s.connection.id} stat={s} onChanged={load} />
             ))}
           </div>
         )}
@@ -77,7 +78,7 @@ export default function Dashboard() {
   );
 }
 
-function DashboardCard({ stat }: { stat: DashboardStat }) {
+function DashboardCard({ stat, onChanged }: { stat: DashboardStat; onChanged: () => void }) {
   const navigate = useNavigate();
   const { connection: conn, lastFull, todayIncrementals, runningBackup, totalBackups } = stat;
 
@@ -95,6 +96,9 @@ function DashboardCard({ stat }: { stat: DashboardStat }) {
               {runningBackup.type}
             </span>
           )}
+          <div onClick={e => e.stopPropagation()}>
+            <ServerOptionsMenu conn={conn} onDeleted={onChanged} />
+          </div>
         </div>
       </div>
 

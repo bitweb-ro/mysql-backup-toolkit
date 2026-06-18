@@ -4,7 +4,6 @@ import { api } from '../api';
 import { Backup, Connection, BackupListResponse } from '../types';
 import { formatBytes, formatDate, formatRelative } from '../utils';
 import LogViewer from '../components/LogViewer';
-import ServerOptionsMenu from '../components/ServerOptionsMenu';
 
 export default function BackupPage() {
   const { id } = useParams<{ id: string }>();
@@ -123,7 +122,6 @@ export default function BackupPage() {
               {isRunning && activeTab === 'full' ? <span className="spinner" /> : '💾'}
               Full backup
             </button>
-            <ServerOptionsMenu conn={conn} />
           </div>
         </div>
       </div>
