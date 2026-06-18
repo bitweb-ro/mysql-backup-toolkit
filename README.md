@@ -40,6 +40,16 @@ Porturile expuse pe host sunt configurabile din `.env` (`PORT_APP_FRONTEND`, `PO
 
 Folderul `backup_servers/` este montat ca bind mount (nu volum Docker intern), deci e accesibil direct din host. Implicit e `./backup_servers`, lângă `docker-compose.yml`. Poate fi schimbat cu variabila `BACKUP_PATH` din `.env` (util când discul local nu are spațiu suficient, ex. `BACKUP_PATH=/mnt/backup-disk`).
 
+### Notificări Slack (opțional)
+
+Din sidebar → **Opțiuni** → secțiunea „Notificări Slack” se poate configura un [Slack Incoming Webhook](https://api.slack.com/messaging/webhooks). Dacă este configurat, aplicația trimite un mesaj prin POST la webhook pentru orice problemă de backup:
+
+- backup eșuat (manual sau programat, full sau incremental);
+- restaurare eșuată;
+- eroare fatală a aplicației (`uncaughtException` / `unhandledRejection`).
+
+Dacă niciun webhook nu este configurat, nu se trimite nimic. Webhook-ul setat din UI este salvat în baza de date internă; alternativ, poate fi furnizat prin variabila de mediu `SLACK_WEBHOOK_URL` (valoarea din UI are prioritate). Butonul „Trimite test” validează că webhook-ul răspunde.
+
 ## Structura fișierelor de backup
 
 ```
@@ -55,7 +65,7 @@ Numele folderului per server e derivat din numele conexiunii: litere mici, diacr
 
 ## Baza de date internă
 
-SQLite (`backend/data/app.db`) — conține conexiunile, istoricul backup-urilor și programările (schedules). Fișierele de backup propriu-zise sunt în `backup_servers/`.
+SQLite (`backend/data/app.db`) — conține conexiunile, istoricul backup-urilor, programările (schedules) și setările platformei (ex. webhook-ul Slack). Fișierele de backup propriu-zise sunt în `backup_servers/`.
 
 ## Cerințe pentru serverul MySQL backup-uit
 

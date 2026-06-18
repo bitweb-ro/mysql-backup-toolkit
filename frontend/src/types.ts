@@ -67,6 +67,12 @@ export interface BackupListResponse {
   };
 }
 
+export interface PlatformSettings {
+  slackWebhookUrl: string;
+  slackWebhookConfigured: boolean;
+  slackWebhookSource: 'db' | 'env' | 'none';
+}
+
 export interface ValidationResult {
   canConnect: boolean;
   mysqlVersion: string | null;

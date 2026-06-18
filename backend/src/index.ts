@@ -9,8 +9,10 @@ import connectionsRouter from './routes/connections';
 import backupsRouter from './routes/backups';
 import dashboardRouter from './routes/dashboard';
 import schedulesRouter from './routes/schedules';
+import settingsRouter from './routes/settings';
 import { authMiddleware } from './middleware/auth';
 import { initScheduler } from './services/schedulerService';
+import { notifyAppCrash } from './services/notificationService';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -28,6 +30,20 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/connections', connectionsRouter);
 app.use('/api/connections/:connectionId/backups', backupsRouter);
 app.use('/api/schedules', schedulesRouter);
+app.use('/api/settings', settingsRouter);
+
+// Capturează erorile neprinse de la nivel de proces și anunță Slack (dacă e
+// configurat) înainte de a opri aplicația. unhandledRejection nu oprește procesul.
+process.on('unhandledRejection', (reason) => {
+  console.error('UNHANDLED REJECTION:', reason);
+  notifyAppCrash('unhandledRejection', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err);
+  // Lasă timp notificării să plece înainte de exit (POST-ul e asincron).
+  notifyAppCrash('uncaughtException', err).finally(() => process.exit(1));
+});
 
 if (process.env.NODE_ENV === 'production') {
   const buildPath = path.join(__dirname, '../../frontend/dist');

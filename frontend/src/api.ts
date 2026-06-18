@@ -95,6 +95,13 @@ export const api = {
   deleteBackup: (connectionId: string, backupId: string) =>
     req<{ success: boolean }>(`/connections/${connectionId}/backups/${backupId}`, { method: 'DELETE' }),
 
+  getSettings: () =>
+    req<import('./types').PlatformSettings>('/settings'),
+  updateSettings: (data: { slackWebhookUrl: string }) =>
+    req<{ success: boolean; slackWebhookConfigured: boolean }>('/settings', { method: 'PUT', body: JSON.stringify(data) }),
+  testSlack: () =>
+    req<{ success: boolean }>('/settings/slack/test', { method: 'POST' }),
+
   getSchedule: (connectionId: string) =>
     req<import('./types').Schedule | null>(`/schedules/${connectionId}`),
   saveSchedule: (connectionId: string, data: Partial<import('./types').Schedule>) =>

@@ -58,7 +58,25 @@ function initSchema() {
       cleanup_incrementals INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
+}
+
+// Generic key-value settings (platform-wide config edited from the UI)
+export function getSetting(key: string): string | null {
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return row ? row.value : null;
+}
+
+export function setSetting(key: string, value: string): void {
+  getDb().prepare(`
+    INSERT INTO settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(key, value);
 }
 
 function runMigrations() {

@@ -13,6 +13,7 @@ import {
   flushLogs,
   cleanupBackups
 } from '../services/backupService';
+import { notifyBackupFailure, notifyRestoreFailure } from '../services/notificationService';
 import { Connection, Backup, Schedule } from '../types';
 
 const router = Router({ mergeParams: true });
@@ -106,6 +107,7 @@ router.post('/full', async (req: Request, res: Response) => {
       db.prepare(`
         UPDATE backups SET status='failed', error_message=?, logs=?, completed_at=datetime('now') WHERE id=?
       `).run(result.error ?? 'Eroare necunoscută', logStr, backupId);
+      notifyBackupFailure({ serverName: conn.name, type: 'full', error: result.error ?? 'Eroare necunoscută' });
     }
   })();
 });
@@ -148,6 +150,7 @@ router.post('/incremental', async (req: Request, res: Response) => {
       db.prepare(`
         UPDATE backups SET status='failed', error_message=?, logs=?, completed_at=datetime('now') WHERE id=?
       `).run(result.error ?? 'Eroare necunoscută', logStr, backupId);
+      notifyBackupFailure({ serverName: conn.name, type: 'incremental', error: result.error ?? 'Eroare necunoscută' });
     }
   })();
 });
@@ -184,6 +187,10 @@ router.post('/:backupId/restore/full', async (req: Request, res: Response) => {
     job.error = result.error;
     job.completedAt = new Date().toISOString();
     restoreJobs.set(jobId, job);
+
+    if (!result.success) {
+      notifyRestoreFailure({ serverName: conn.name, type: 'full', error: result.error ?? 'Eroare necunoscută' });
+    }
   })();
 });
 
@@ -219,6 +226,10 @@ router.post('/:backupId/restore/incremental', async (req: Request, res: Response
     job.error = result.error;
     job.completedAt = new Date().toISOString();
     restoreJobs.set(jobId, job);
+
+    if (!result.success) {
+      notifyRestoreFailure({ serverName: conn.name, type: 'incremental', error: result.error ?? 'Eroare necunoscută' });
+    }
   })();
 });
 

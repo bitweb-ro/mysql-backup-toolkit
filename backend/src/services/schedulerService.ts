@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db/database';
 import { performFullBackup, performIncrementalBackup, flushLogs, cleanupBackups } from './backupService';
+import { notifyBackupFailure } from './notificationService';
 import { Connection, Backup, Schedule } from '../types';
 
 const activeTasks = new Map<string, cron.ScheduledTask[]>();
@@ -81,8 +82,10 @@ async function runScheduledBackup(connectionId: string, type: 'full' | 'incremen
       `).get(connectionId) as Backup | undefined;
 
       if (!lastBackup) {
+        const msg = 'Nu există backup full anterior.';
         db.prepare("UPDATE backups SET status='failed', error_message=?, completed_at=datetime('now') WHERE id=?")
-          .run('Nu există backup full anterior.', backupId);
+          .run(msg, backupId);
+        notifyBackupFailure({ serverName: conn.name, type, error: msg, scheduled: true });
         return;
       }
       result = await performIncrementalBackup(conn, conn.name, backupId, lastBackup.binlog_file, lastBackup.binlog_pos);
@@ -103,10 +106,12 @@ async function runScheduledBackup(connectionId: string, type: 'full' | 'incremen
     } else {
       db.prepare("UPDATE backups SET status='failed', error_message=?, logs=?, completed_at=datetime('now') WHERE id=?")
         .run(result.error ?? 'Eroare', logStr, backupId);
+      notifyBackupFailure({ serverName: conn.name, type, error: result.error ?? 'Eroare', scheduled: true });
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     db.prepare("UPDATE backups SET status='failed', error_message=?, completed_at=datetime('now') WHERE id=?")
       .run(message, backupId);
+    notifyBackupFailure({ serverName: conn.name, type, error: message, scheduled: true });
   }
 }
