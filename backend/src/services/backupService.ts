@@ -2,7 +2,7 @@ import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
-import { Connection, BackupResult, BinlogInfo } from '../types';
+import { Connection, Backup, BackupResult, BinlogInfo } from '../types';
 
 const execAsync = promisify(exec);
 
@@ -10,6 +10,10 @@ const execAsync = promisify(exec);
 // Dockerfile and docker-compose files), while the BACKUP_PATH volume is
 // mounted one level up, at <project-root>/backup_servers.
 const BACKUP_ROOT = path.join(process.cwd(), '..', 'backup_servers');
+
+export function getBackupRoot(): string {
+  return BACKUP_ROOT;
+}
 
 // In-memory log buffer for running operations
 const opLogs = new Map<string, string[]>();
@@ -35,14 +39,18 @@ const DIACRITICS_MAP: Record<string, string> = {
   Ă: 'a', Â: 'a', Î: 'i', Ș: 's', Ş: 's', Ț: 't', Ţ: 't',
 };
 
-export function getServerDir(serverName: string): string {
+// Numele de folder al serverului, folosit și local și pe destinațiile remote.
+export function getServerSlug(serverName: string): string {
   const transliterated = serverName.replace(/[ăâîșşțţĂÂÎȘŞȚŢ]/g, c => DIACRITICS_MAP[c] || c);
-  const safe = transliterated
+  return transliterated
     .toLowerCase()
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9_-]/g, '_')
     .replace(/_+/g, '_');
-  return path.join(BACKUP_ROOT, safe);
+}
+
+export function getServerDir(serverName: string): string {
+  return path.join(BACKUP_ROOT, getServerSlug(serverName));
 }
 
 export function getFullBackupDir(serverName: string): string {
@@ -507,18 +515,19 @@ export async function cleanupBackups(
   cleanupIncrementals: boolean
 ) {
   const { getDb } = await import('../db/database');
+  const { deleteStoredBackup } = await import('./storageService');
   const db = getDb();
 
   // Delete backups older than retention_days
   if (retentionDays > 0) {
     const old = db.prepare(`
-      SELECT id, file_path FROM backups
+      SELECT * FROM backups
       WHERE connection_id = ? AND status = 'success'
         AND datetime(completed_at) < datetime('now', '-' || ? || ' days')
-    `).all(connectionId, retentionDays) as { id: string; file_path: string | null }[];
+    `).all(connectionId, retentionDays) as Backup[];
 
     for (const b of old) {
-      if (b.file_path && fs.existsSync(b.file_path)) fs.unlinkSync(b.file_path);
+      await deleteStoredBackup(connectionId, b);
       db.prepare('DELETE FROM backups WHERE id = ?').run(b.id);
     }
   }
@@ -526,7 +535,7 @@ export async function cleanupBackups(
   // Delete previous day's incrementals if a full backup exists for that day
   if (cleanupIncrementals) {
     const prevDayIncrementals = db.prepare(`
-      SELECT b.id, b.file_path, date(b.started_at) as day FROM backups b
+      SELECT b.* FROM backups b
       WHERE b.connection_id = ? AND b.type = 'incremental' AND b.status = 'success'
         AND date(b.started_at) < date('now')
         AND EXISTS (
@@ -534,10 +543,10 @@ export async function cleanupBackups(
           WHERE f.connection_id = ? AND f.type = 'full' AND f.status = 'success'
             AND date(f.started_at) = date(b.started_at)
         )
-    `).all(connectionId, connectionId) as { id: string; file_path: string | null; day: string }[];
+    `).all(connectionId, connectionId) as Backup[];
 
     for (const b of prevDayIncrementals) {
-      if (b.file_path && fs.existsSync(b.file_path)) fs.unlinkSync(b.file_path);
+      await deleteStoredBackup(connectionId, b);
       db.prepare('DELETE FROM backups WHERE id = ?').run(b.id);
     }
   }
@@ -576,7 +585,7 @@ export function deleteBackupFile(filePath: string): boolean {
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
   const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 }

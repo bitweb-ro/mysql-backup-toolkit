@@ -1,23 +1,120 @@
 import { Router, Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'crypto';
 import fs from 'fs';
 import { getDb } from '../db/database';
-import { testConnection, validateMySQLCapabilities, deleteBackupFile, getServerDir } from '../services/backupService';
+import { testConnection, validateMySQLCapabilities, getServerDir } from '../services/backupService';
+import {
+  getServerStorageConfig, getDefaultStorageConfig, maskStorageConfig, describeStorage,
+  parseStorageConfigInput, testStorage, deleteStoredBackup, getLocalCopy,
+} from '../services/storageService';
+import {
+  getSlackWebhookUrl, getServerSlackWebhookUrl, setServerSlackWebhookUrl, isSlackWebhookUrl, testSlackWebhook,
+} from '../services/notificationService';
 import { Connection, Backup } from '../types';
 
 const router = Router();
 
+// storage_config conține secrete (parole SFTP/FTP, chei S3): se expune doar mascat, prin /:id/storage.
+export function publicConnection(conn: Connection): Omit<Connection, 'storage_config'> {
+  const { storage_config: _omit, ...rest } = conn;
+  return rest;
+}
+
 router.get('/', (_req: Request, res: Response) => {
   const db = getDb();
   const connections = db.prepare('SELECT * FROM connections ORDER BY name ASC').all() as Connection[];
-  res.json(connections);
+  res.json(connections.map(publicConnection));
 });
 
 router.get('/:id', (req: Request, res: Response) => {
   const db = getDb();
   const conn = db.prepare('SELECT * FROM connections WHERE id = ?').get(req.params.id) as Connection | undefined;
   if (!conn) return res.status(404).json({ error: 'Connection not found' });
-  res.json(conn);
+  res.json(publicConnection(conn));
+});
+
+// Destinația backup-urilor pentru acest server. config = null → folosește destinația implicită.
+router.get('/:id/storage', (req: Request, res: Response) => {
+  const db = getDb();
+  const conn = db.prepare('SELECT * FROM connections WHERE id = ?').get(req.params.id) as Connection | undefined;
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
+  const own = getServerStorageConfig(conn);
+  const def = getDefaultStorageConfig();
+  res.json({
+    config: own ? maskStorageConfig(own) : null,
+    defaultDescription: describeStorage(def),
+    activeDescription: describeStorage(own ?? def),
+  });
+});
+
+// Webhook Slack propriu serverului. Gol = alertele serverului merg pe webhook-ul global.
+router.get('/:id/slack', (req: Request, res: Response) => {
+  const db = getDb();
+  const conn = db.prepare('SELECT id FROM connections WHERE id = ?').get(req.params.id);
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
+  res.json({
+    slackWebhookUrl: getServerSlackWebhookUrl(req.params.id),
+    globalConfigured: !!getSlackWebhookUrl(),
+  });
+});
+
+router.put('/:id/slack', (req: Request, res: Response) => {
+  const db = getDb();
+  const conn = db.prepare('SELECT id FROM connections WHERE id = ?').get(req.params.id);
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
+  const { slackWebhookUrl } = req.body || {};
+  if (typeof slackWebhookUrl !== 'string') {
+    return res.status(400).json({ error: 'slackWebhookUrl trebuie să fie un string.' });
+  }
+  const url = slackWebhookUrl.trim();
+  if (url && !isSlackWebhookUrl(url)) {
+    return res.status(400).json({ error: 'URL invalid. Trebuie să fie un Slack Incoming Webhook (https://hooks.slack.com/...).' });
+  }
+  setServerSlackWebhookUrl(req.params.id, url);
+  res.json({ success: true, slackWebhookUrl: url });
+});
+
+// Trimite un mesaj de test pe webhook-ul folosit de acest server (propriu sau global).
+router.post('/:id/slack/test', async (req: Request, res: Response) => {
+  try {
+    await testSlackWebhook(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Test eșuat.' });
+  }
+});
+
+// Salvează destinația serverului. Body: { config: StorageConfig | null }; null = revine la implicită.
+router.put('/:id/storage', (req: Request, res: Response) => {
+  const db = getDb();
+  const conn = db.prepare('SELECT * FROM connections WHERE id = ?').get(req.params.id) as Connection | undefined;
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
+
+  const { config } = req.body || {};
+  if (config === null) {
+    db.prepare("UPDATE connections SET storage_config = NULL, updated_at = datetime('now') WHERE id = ?").run(conn.id);
+    return res.json({ success: true, config: null });
+  }
+  const parsed = parseStorageConfigInput(config, getServerStorageConfig(conn));
+  if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+  db.prepare("UPDATE connections SET storage_config = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(JSON.stringify(parsed.config), conn.id);
+  res.json({ success: true, config: maskStorageConfig(parsed.config) });
+});
+
+// Testează configurația din formular (nesalvată); secretele mascate se iau din configurația salvată.
+router.post('/:id/storage/test', async (req: Request, res: Response) => {
+  const db = getDb();
+  const conn = db.prepare('SELECT * FROM connections WHERE id = ?').get(req.params.id) as Connection | undefined;
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
+
+  const parsed = parseStorageConfigInput(req.body?.config, getServerStorageConfig(conn));
+  if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+  try {
+    res.json({ success: true, message: await testStorage(parsed.config) });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Test eșuat.' });
+  }
 });
 
 router.post('/', async (req: Request, res: Response) => {
@@ -32,7 +129,7 @@ router.post('/', async (req: Request, res: Response) => {
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(id, name, host, port || 3306, user, password, database_name);
   const conn = db.prepare('SELECT * FROM connections WHERE id = ?').get(id) as Connection;
-  res.status(201).json(conn);
+  res.status(201).json(publicConnection(conn));
 });
 
 router.put('/:id', (req: Request, res: Response) => {
@@ -45,7 +142,7 @@ router.put('/:id', (req: Request, res: Response) => {
     WHERE id=?
   `).run(name, host, port || 3306, user, password, database_name, req.params.id);
   const conn = db.prepare('SELECT * FROM connections WHERE id = ?').get(req.params.id) as Connection;
-  res.json(conn);
+  res.json(publicConnection(conn));
 });
 
 // Check if connection has backups before delete
@@ -78,10 +175,10 @@ router.delete('/:id', async (req: Request, res: Response) => {
     if (!appPassword || confirmPassword !== appPassword) {
       return res.status(401).json({ error: 'Parolă incorectă. Ștergerea a fost anulată.' });
     }
-    // 1. Delete all backup files from disk
-    const backups = db.prepare('SELECT file_path FROM backups WHERE connection_id = ?').all(req.params.id) as { file_path: string | null }[];
+    // 1. Delete all backup files, local and remote (remote errors are only logged)
+    const backups = db.prepare('SELECT * FROM backups WHERE connection_id = ?').all(req.params.id) as Backup[];
     for (const b of backups) {
-      if (b.file_path) deleteBackupFile(b.file_path);
+      await deleteStoredBackup(req.params.id, b);
     }
     // 2. Delete entire server backup folder (catches any orphaned files)
     const serverDir = getServerDir(conn.name);
@@ -96,6 +193,8 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
   // 5. Delete the connection (CASCADE would handle backups/schedules but we do it explicitly above)
   db.prepare('DELETE FROM connections WHERE id = ?').run(req.params.id);
+  // 6. Clear the server's own Slack webhook (stored in settings, not covered by CASCADE)
+  setServerSlackWebhookUrl(req.params.id, '');
   res.json({ success: true });
 });
 
@@ -157,10 +256,13 @@ router.post('/import/config', (req: Request, res: Response) => {
     if (!c.name || !c.host || !c.user || !c.database_name) { skipped++; continue; }
     const existing = db.prepare('SELECT id FROM connections WHERE name = ? AND host = ?').get(c.name, c.host);
     if (existing) { skipped++; continue; }
+    // storage_config vine din export ca JSON string; se păstrează doar dacă e o configurație validă.
+    const storage = typeof c.storage_config === 'string' ? getServerStorageConfig(c as Connection) : null;
     db.prepare(`
-      INSERT INTO connections (id, name, host, port, user, password, database_name)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(c.id || uuidv4(), c.name, c.host, c.port || 3306, c.user, c.password || '', c.database_name);
+      INSERT INTO connections (id, name, host, port, user, password, database_name, storage_config)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(c.id || uuidv4(), c.name, c.host, c.port || 3306, c.user, c.password || '', c.database_name,
+      storage ? JSON.stringify(storage) : null);
     imported++;
   }
 
@@ -168,19 +270,27 @@ router.post('/import/config', (req: Request, res: Response) => {
 });
 
 // Download a backup file
-router.get('/:id/backups/:backupId/download', (req: Request, res: Response) => {
+// Fișierul local dacă există, altfel descărcat temporar de pe destinația remote.
+router.get('/:id/backups/:backupId/download', async (req: Request, res: Response) => {
   const db = getDb();
   const backup = db.prepare('SELECT * FROM backups WHERE id = ? AND connection_id = ?')
     .get(req.params.backupId, req.params.id) as Backup | undefined;
 
   if (!backup) return res.status(404).json({ error: 'Backup not found' });
-  if (!backup.file_path) return res.status(404).json({ error: 'Fișierul backup nu există' });
-  if (!fs.existsSync(backup.file_path)) return res.status(404).json({ error: 'Fișierul nu mai există pe disc' });
+  if (!backup.file_path && !backup.remote_path) return res.status(404).json({ error: 'Fișierul backup nu există' });
 
-  const fileName = backup.file_path.split('/').pop() || 'backup.sql.gz';
+  let copy: { path: string; cleanup: () => void };
+  try {
+    copy = await getLocalCopy(req.params.id, backup);
+  } catch (err) {
+    return res.status(404).json({ error: err instanceof Error ? err.message : 'Fișierul nu a putut fi citit.' });
+  }
+
+  const fileName = (backup.file_path || backup.remote_path || '').split('/').pop() || 'backup.sql.gz';
   res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
   res.setHeader('Content-Type', 'application/gzip');
-  fs.createReadStream(backup.file_path).pipe(res);
+  res.on('close', copy.cleanup);
+  fs.createReadStream(copy.path).pipe(res);
 });
 
 export default router;

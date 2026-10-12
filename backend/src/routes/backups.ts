@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'crypto';
 import { getDb } from '../db/database';
 import {
   performFullBackup,
@@ -7,14 +7,15 @@ import {
   restoreFullBackup,
   restoreIncrementalBackup,
   getBackupFiles,
-  deleteBackupFile,
   appendLog,
   getLogs,
   flushLogs,
   cleanupBackups
 } from '../services/backupService';
 import { notifyBackupFailure, notifyRestoreFailure } from '../services/notificationService';
-import { Connection, Backup, Schedule } from '../types';
+import { checkDiskSpace } from '../services/diskService';
+import { storeBackup, getLocalCopy, deleteStoredBackup } from '../services/storageService';
+import { Connection, Backup, BackupResult, Schedule } from '../types';
 
 const router = Router({ mergeParams: true });
 
@@ -27,6 +28,28 @@ interface RestoreJob {
   completedAt?: string;
 }
 const restoreJobs = new Map<string, RestoreJob>();
+
+// Restaurează din fișierul local sau, dacă backup-ul există doar remote,
+// dintr-o copie descărcată temporar (ștearsă după restaurare).
+async function restoreFromStorage(
+  connectionId: string,
+  backup: Backup,
+  jobId: string,
+  restore: (filePath: string) => Promise<BackupResult>
+): Promise<BackupResult> {
+  try {
+    const copy = await getLocalCopy(connectionId, backup, jobId);
+    try {
+      return await restore(copy.path);
+    } finally {
+      copy.cleanup();
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    appendLog(jobId, `EROARE: ${message}`);
+    return { success: false, error: message };
+  }
+}
 
 // List backups
 router.get('/', (req: Request, res: Response) => {
@@ -89,14 +112,17 @@ router.post('/full', async (req: Request, res: Response) => {
   res.json({ backupId, status: 'running' });
 
   (async () => {
-    const result = await performFullBackup(conn, conn.name, backupId);
+    let result = await performFullBackup(conn, conn.name, backupId);
+    if (result.success) result = await storeBackup(conn, 'full', result, backupId);
     const logStr = flushLogs(backupId);
 
     if (result.success) {
       db.prepare(`
-        UPDATE backups SET status='success', file_path=?, file_size=?, binlog_file=?, binlog_pos=?, logs=?, completed_at=datetime('now')
+        UPDATE backups SET status='success', file_path=?, file_size=?, binlog_file=?, binlog_pos=?, logs=?,
+          storage_type=?, remote_path=?, storage_error=?, completed_at=datetime('now')
         WHERE id=?
-      `).run(result.filePath ?? null, result.fileSize ?? null, result.binlogFile ?? null, result.binlogPos ?? null, logStr, backupId);
+      `).run(result.filePath ?? null, result.fileSize ?? null, result.binlogFile ?? null, result.binlogPos ?? null, logStr,
+        result.storageType ?? null, result.remotePath ?? null, result.storageError ?? null, backupId);
 
       // Run cleanup after successful full backup
       const schedule = db.prepare('SELECT * FROM schedules WHERE connection_id = ?').get(connectionId) as Schedule | undefined;
@@ -107,8 +133,9 @@ router.post('/full', async (req: Request, res: Response) => {
       db.prepare(`
         UPDATE backups SET status='failed', error_message=?, logs=?, completed_at=datetime('now') WHERE id=?
       `).run(result.error ?? 'Eroare necunoscută', logStr, backupId);
-      notifyBackupFailure({ serverName: conn.name, type: 'full', error: result.error ?? 'Eroare necunoscută' });
+      notifyBackupFailure({ connectionId: conn.id, serverName: conn.name, type: 'full', error: result.error ?? 'Eroare necunoscută' });
     }
+    checkDiskSpace(conn.name);
   })();
 });
 
@@ -138,20 +165,24 @@ router.post('/incremental', async (req: Request, res: Response) => {
   res.json({ backupId, status: 'running' });
 
   (async () => {
-    const result = await performIncrementalBackup(conn, conn.name, backupId, lastBackup.binlog_file, lastBackup.binlog_pos);
+    let result = await performIncrementalBackup(conn, conn.name, backupId, lastBackup.binlog_file, lastBackup.binlog_pos);
+    if (result.success) result = await storeBackup(conn, 'incremental', result, backupId);
     const logStr = flushLogs(backupId);
 
     if (result.success) {
       db.prepare(`
-        UPDATE backups SET status='success', file_path=?, file_size=?, binlog_file=?, binlog_pos=?, logs=?, completed_at=datetime('now')
+        UPDATE backups SET status='success', file_path=?, file_size=?, binlog_file=?, binlog_pos=?, logs=?,
+          storage_type=?, remote_path=?, storage_error=?, completed_at=datetime('now')
         WHERE id=?
-      `).run(result.filePath ?? null, result.fileSize ?? null, result.binlogFile ?? null, result.binlogPos ?? null, logStr, backupId);
+      `).run(result.filePath ?? null, result.fileSize ?? null, result.binlogFile ?? null, result.binlogPos ?? null, logStr,
+        result.storageType ?? null, result.remotePath ?? null, result.storageError ?? null, backupId);
     } else {
       db.prepare(`
         UPDATE backups SET status='failed', error_message=?, logs=?, completed_at=datetime('now') WHERE id=?
       `).run(result.error ?? 'Eroare necunoscută', logStr, backupId);
-      notifyBackupFailure({ serverName: conn.name, type: 'incremental', error: result.error ?? 'Eroare necunoscută' });
+      notifyBackupFailure({ connectionId: conn.id, serverName: conn.name, type: 'incremental', error: result.error ?? 'Eroare necunoscută' });
     }
+    checkDiskSpace(conn.name);
   })();
 });
 
@@ -166,7 +197,7 @@ router.post('/:backupId/restore/full', async (req: Request, res: Response) => {
   const backup = db.prepare("SELECT * FROM backups WHERE id = ? AND connection_id = ? AND type = 'full' AND status = 'success'")
     .get(req.params.backupId, connectionId) as Backup | undefined;
   if (!backup) return res.status(404).json({ error: 'Full backup not found' });
-  if (!backup.file_path) return res.status(400).json({ error: 'Backup file path missing' });
+  if (!backup.file_path && !backup.remote_path) return res.status(400).json({ error: 'Backup file path missing' });
 
   const jobId = uuidv4();
   const job: RestoreJob = { status: 'running', logs: [], startedAt: new Date().toISOString() };
@@ -178,7 +209,7 @@ router.post('/:backupId/restore/full', async (req: Request, res: Response) => {
     appendLog(jobId, `Pornire restaurare full pentru '${conn.database_name}'...`);
     job.logs = getLogs(jobId);
 
-    const result = await restoreFullBackup(conn, backup.file_path!, jobId);
+    const result = await restoreFromStorage(connectionId, backup, jobId, fp => restoreFullBackup(conn, fp, jobId));
     const finalLogs = getLogs(jobId);
     flushLogs(jobId);
 
@@ -189,7 +220,7 @@ router.post('/:backupId/restore/full', async (req: Request, res: Response) => {
     restoreJobs.set(jobId, job);
 
     if (!result.success) {
-      notifyRestoreFailure({ serverName: conn.name, type: 'full', error: result.error ?? 'Eroare necunoscută' });
+      notifyRestoreFailure({ connectionId: conn.id, serverName: conn.name, type: 'full', error: result.error ?? 'Eroare necunoscută' });
     }
   })();
 });
@@ -205,7 +236,7 @@ router.post('/:backupId/restore/incremental', async (req: Request, res: Response
   const backup = db.prepare("SELECT * FROM backups WHERE id = ? AND connection_id = ? AND type = 'incremental' AND status = 'success'")
     .get(req.params.backupId, connectionId) as Backup | undefined;
   if (!backup) return res.status(404).json({ error: 'Incremental backup not found' });
-  if (!backup.file_path) return res.status(400).json({ error: 'Backup file path missing' });
+  if (!backup.file_path && !backup.remote_path) return res.status(400).json({ error: 'Backup file path missing' });
 
   const jobId = uuidv4();
   const job: RestoreJob = { status: 'running', logs: [], startedAt: new Date().toISOString() };
@@ -217,7 +248,7 @@ router.post('/:backupId/restore/incremental', async (req: Request, res: Response
     appendLog(jobId, `Pornire restaurare incrementală...`);
     job.logs = getLogs(jobId);
 
-    const result = await restoreIncrementalBackup(conn, backup.file_path!, jobId);
+    const result = await restoreFromStorage(connectionId, backup, jobId, fp => restoreIncrementalBackup(conn, fp, jobId));
     const finalLogs = getLogs(jobId);
     flushLogs(jobId);
 
@@ -228,13 +259,13 @@ router.post('/:backupId/restore/incremental', async (req: Request, res: Response
     restoreJobs.set(jobId, job);
 
     if (!result.success) {
-      notifyRestoreFailure({ serverName: conn.name, type: 'incremental', error: result.error ?? 'Eroare necunoscută' });
+      notifyRestoreFailure({ connectionId: conn.id, serverName: conn.name, type: 'incremental', error: result.error ?? 'Eroare necunoscută' });
     }
   })();
 });
 
 // Delete backup
-router.delete('/:backupId', (req: Request, res: Response) => {
+router.delete('/:backupId', async (req: Request, res: Response) => {
   const db = getDb();
   const { connectionId } = req.params;
 
@@ -242,10 +273,11 @@ router.delete('/:backupId', (req: Request, res: Response) => {
     .get(req.params.backupId, connectionId) as Backup | undefined;
   if (!backup) return res.status(404).json({ error: 'Backup not found' });
 
-  if (backup.file_path) deleteBackupFile(backup.file_path);
+  // Șterge local și remote; dacă fișierul remote nu poate fi șters, înregistrarea se șterge oricum.
+  const warning = await deleteStoredBackup(connectionId, backup);
   db.prepare('DELETE FROM backups WHERE id = ?').run(req.params.backupId);
 
-  res.json({ success: true });
+  res.json({ success: true, warning });
 });
 
 export default router;

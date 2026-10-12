@@ -29,5 +29,8 @@ Thumbs.db
 .idea/
 *.swp
 
-# Claude Code project instructions (local only, not shared)
+# Claude Code project instructions + skills (local only, not shared)
 CLAUDE.md
+.claude/
+
+.claude/

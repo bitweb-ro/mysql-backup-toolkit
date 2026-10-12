@@ -32,6 +32,10 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
       : { ...defaultForm },
   );
   const [error, setError] = useState("");
+  // Câmpurile obligatorii goale primesc border roșu doar după o încercare de salvare / testare.
+  const [showRequired, setShowRequired] = useState(false);
+  const missing = (k: "name" | "host" | "user" | "password" | "database_name") =>
+    showRequired && !String(form[k]).trim() ? "input-error" : undefined;
   const [privOpen, setPrivOpen] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -84,6 +88,7 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
 
   const handleTestPrivileges = async () => {
     if (!form.host || !form.user || !form.password || !form.database_name) {
+      setShowRequired(true);
       setError(
         "Completează host, user, parolă și baza de date pentru a testa.",
       );
@@ -110,7 +115,8 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
       !form.password ||
       !form.database_name
     ) {
-      setError("Completează toate câmpurile obligatorii.");
+      setShowRequired(true);
+      setError("Completează câmpurile obligatorii marcate cu roșu.");
       return;
     }
     setSaving(true);
@@ -160,6 +166,7 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
         <div className="form-group">
           <label className="form-label">Nume server *</label>
           <input
+            className={missing("name")}
             value={form.name}
             onChange={(e) => set("name", e.target.value)}
             placeholder="ex: Baza de date X"
@@ -170,6 +177,7 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
           <div className="form-group">
             <label className="form-label">Host *</label>
             <input
+              className={missing("host")}
               value={form.host}
               onChange={(e) => set("host", e.target.value)}
               placeholder="localhost"
@@ -189,6 +197,7 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
           <div className="form-group">
             <label className="form-label">User *</label>
             <input
+              className={missing("user")}
               value={form.user}
               onChange={(e) => set("user", e.target.value)}
               placeholder="root"
@@ -197,6 +206,7 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
           <div className="form-group">
             <label className="form-label">Parolă *</label>
             <input
+              className={missing("password")}
               type="password"
               value={form.password}
               onChange={(e) => set("password", e.target.value)}
@@ -208,6 +218,7 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
         <div className="form-group">
           <label className="form-label">Baza de date *</label>
           <input
+            className={missing("database_name")}
             value={form.database_name}
             onChange={(e) => set("database_name", e.target.value)}
             placeholder="mydb"

@@ -19,6 +19,8 @@
   --red-bg: rgba(220,38,38,0.10);
   --amber: #b45309;
   --amber-bg: rgba(180,83,9,0.10);
+  --yellow: #eab308;
+  --purple: #7c3aed;
   --radius: 8px;
   --radius-lg: 12px;
   --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
@@ -132,6 +134,23 @@ body {
 .page-header-row { display: flex; justify-content: space-between; align-items: flex-start; }
 
 .page-content { padding: 24px 32px; flex: 1; }
+
+/* Pagina unui server: antet cu nume + tab-uri (Dashboard, Backup, Restore, Program, Stocare) */
+.server-header { padding: 20px 32px 0; background: var(--bg); border-bottom: 1px solid var(--border); }
+.server-header h2 { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; }
+.server-header p { font-size: 13px; color: var(--text2); margin-top: 2px; }
+.server-tabs { display: flex; gap: 4px; margin-top: 14px; overflow-x: auto; }
+.server-tab {
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text2);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.server-tab:hover { color: var(--text); }
+.server-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 
 /* Cards */
 .card {
@@ -353,7 +372,7 @@ tr:hover td { background: var(--bg3); }
 .form-group { margin-bottom: 14px; }
 .form-label { display: block; font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; }
 
-input, select {
+input, select, textarea {
   width: 100%;
   padding: 8px 12px;
   background: var(--bg3);
@@ -365,7 +384,10 @@ input, select {
   outline: none;
   transition: border-color 0.12s;
 }
-input:focus, select:focus { border-color: var(--accent); }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+textarea { font-family: var(--mono); resize: vertical; }
+/* Câmp obligatoriu necompletat, marcat după apăsarea pe Salvează */
+input.input-error, textarea.input-error { border-color: var(--red); }
 input[type="password"] { font-family: var(--mono); letter-spacing: 0.05em; }
 
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -569,7 +591,8 @@ input[type="password"] { font-family: var(--mono); letter-spacing: 0.05em; }
   padding: 4px 0;
 }
 
-.schedule-toggle input[type="checkbox"] {
+.schedule-toggle input[type="checkbox"],
+.schedule-toggle input[type="radio"] {
   width: 16px;
   height: 16px;
   min-width: 16px;

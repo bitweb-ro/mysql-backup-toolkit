@@ -133,10 +133,7 @@ export default function SchedulePage() {
       <div className="page-header">
         <div className="page-header-row">
           <div>
-            <h2>Program backup — {conn.name}</h2>
-            <p className="mono">
-              {conn.user}@{conn.host}:{conn.port}/{conn.database_name}
-            </p>
+            <h2>Program backup</h2>
           </div>
           <div className="page-actions">
             {schedule && (

@@ -1,7 +1,10 @@
 import { useState } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
+import ServerLayout from './components/ServerLayout';
 import Dashboard from './pages/Dashboard';
+import ServerDashboard from './pages/ServerDashboard';
+import ServerSettingsPage from './pages/ServerSettingsPage';
 import BackupPage from './pages/BackupPage';
 import RestorePage from './pages/RestorePage';
 import SchedulePage from './pages/SchedulePage';
@@ -14,9 +17,14 @@ function Layout({ onLogout }: { onLogout: () => void }) {
       <main className="main">
         <Routes>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/server/:id/backup" element={<BackupPage />} />
-          <Route path="/server/:id/restore" element={<RestorePage />} />
-          <Route path="/server/:id/schedule" element={<SchedulePage />} />
+          <Route path="/server/:id" element={<ServerLayout />}>
+            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route path="dashboard" element={<ServerDashboard />} />
+            <Route path="backup" element={<BackupPage />} />
+            <Route path="restore" element={<RestorePage />} />
+            <Route path="schedule" element={<SchedulePage />} />
+            <Route path="settings" element={<ServerSettingsPage />} />
+          </Route>
         </Routes>
       </main>
     </div>

@@ -1,15 +1,14 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { api } from '../api';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { api, onConnectionsChanged } from '../api';
 import { DashboardStat, Connection } from '../types';
 import ConnectionModal from './ConnectionModal';
+import { SERVER_STATUSES, serverStatus, formatRelative } from '../utils';
 import PlatformOptionsMenu from './PlatformOptionsMenu';
 
 export default function Sidebar({ onLogout }: { onLogout: () => void }) {
   const [stats, setStats] = useState<DashboardStat[]>([]);
   const [showModal, setShowModal] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -20,22 +19,17 @@ export default function Sidebar({ onLogout }: { onLogout: () => void }) {
   useEffect(() => {
     load();
     const t = setInterval(load, 10000);
-    return () => clearInterval(t);
+    const off = onConnectionsChanged(load);
+    return () => { clearInterval(t); off(); };
   }, []);
-
-  // Keep the server containing the currently viewed page expanded
-  useEffect(() => {
-    if (id) setExpandedId(id);
-  }, [id]);
 
   const handleSaved = (conn: Connection) => {
     setShowModal(false);
-    load();
-    navigate(`/server/${conn.id}/backup`);
+    navigate(`/server/${conn.id}/dashboard`);
   };
 
-  const isActive = (serverId: string, page: string) =>
-    id === serverId && location.pathname.includes(page);
+  // Sidebar-ul e în afara <Routes>, deci id-ul serverului se citește din URL.
+  const isActive = (serverId: string) => location.pathname.startsWith(`/server/${serverId}/`);
 
   return (
     <>
@@ -70,46 +64,29 @@ export default function Sidebar({ onLogout }: { onLogout: () => void }) {
           <div className="sidebar-section" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
             <div className="sidebar-section-label">Servere ({stats.length})</div>
             {stats.map(s => {
-              const expanded = expandedId === s.connection.id;
+              const status = serverStatus(!!s.runningBackup, s.lastBackupAt);
               return (
-                <div key={s.connection.id}>
-                  <button
-                    onClick={() => setExpandedId(expanded ? null : s.connection.id)}
-                    style={{
-                      width: '100%', padding: '6px 12px', fontSize: 12, color: 'var(--text2)', fontWeight: 600,
-                      display: 'flex', alignItems: 'center', gap: 6, marginTop: 4,
-                      background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left'
-                    }}
-                  >
-                    <svg
-                      width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"
-                      style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', flexShrink: 0 }}
-                    >
-                      <path d="M9 18l6-6-6-6" />
-                    </svg>
-                    <span
-                      className="dot"
-                      style={{ background: s.runningBackup ? 'var(--amber)' : 'var(--green)' }}
-                      title={s.runningBackup ? 'Backup în curs' : 'Activ'}
-                    />
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.connection.name}</span>
-                  </button>
-                  {expanded && (
-                    <>
-                      <button className={`sidebar-item ${isActive(s.connection.id, 'backup') ? 'active' : ''}`} style={{ paddingLeft: 28, fontSize: 12 }} onClick={() => navigate(`/server/${s.connection.id}/backup`)}>
-                        📦 Backup
-                      </button>
-                      <button className={`sidebar-item ${isActive(s.connection.id, 'restore') ? 'active' : ''}`} style={{ paddingLeft: 28, fontSize: 12 }} onClick={() => navigate(`/server/${s.connection.id}/restore`)}>
-                        ↩ Restore
-                      </button>
-                      <button className={`sidebar-item ${isActive(s.connection.id, 'schedule') ? 'active' : ''}`} style={{ paddingLeft: 28, fontSize: 12 }} onClick={() => navigate(`/server/${s.connection.id}/schedule`)}>
-                        🕐 Program
-                      </button>
-                    </>
-                  )}
-                </div>
+                <button
+                  key={s.connection.id}
+                  className={`sidebar-item ${isActive(s.connection.id) ? 'active' : ''}`}
+                  onClick={() => navigate(`/server/${s.connection.id}/dashboard`)}
+                >
+                  <span
+                    className="dot"
+                    style={{ background: status.color }}
+                    title={s.lastBackupAt ? `${status.label} (ultimul: ${formatRelative(s.lastBackupAt)})` : status.label}
+                  />
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.connection.name}</span>
+                </button>
               );
             })}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '10px 12px 4px', fontSize: 11, color: 'var(--text3)' }}>
+              {SERVER_STATUSES.map(st => (
+                <span key={st.key} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: st.color, flexShrink: 0 }} /> {st.label}
+                </span>
+              ))}
+            </div>
           </div>
         )}
 

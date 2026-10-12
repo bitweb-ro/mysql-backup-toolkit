@@ -1,11 +1,13 @@
-import cron from 'node-cron';
-import { v4 as uuidv4 } from 'uuid';
+import cron, { ScheduledTask } from 'node-cron';
+import { randomUUID as uuidv4 } from 'crypto';
 import { getDb } from '../db/database';
 import { performFullBackup, performIncrementalBackup, flushLogs, cleanupBackups } from './backupService';
 import { notifyBackupFailure } from './notificationService';
+import { checkDiskSpace } from './diskService';
+import { storeBackup } from './storageService';
 import { Connection, Backup, Schedule } from '../types';
 
-const activeTasks = new Map<string, cron.ScheduledTask[]>();
+const activeTasks = new Map<string, ScheduledTask[]>();
 
 export function initScheduler() {
   const db = getDb();
@@ -26,7 +28,7 @@ export function registerSchedule(schedule: Schedule) {
   // Clear existing tasks for this connection
   unregisterSchedule(schedule.connection_id);
 
-  const tasks: cron.ScheduledTask[] = [];
+  const tasks: ScheduledTask[] = [];
 
   if (schedule.full_cron && cron.validate(schedule.full_cron) && schedule.enabled) {
     const task = cron.schedule(schedule.full_cron, () => runScheduledBackup(schedule.connection_id, 'full'));
@@ -48,7 +50,8 @@ export function registerSchedule(schedule: Schedule) {
 export function unregisterSchedule(connectionId: string) {
   const tasks = activeTasks.get(connectionId);
   if (tasks) {
-    tasks.forEach(t => t.stop());
+    // destroy (nu doar stop): în node-cron v4 task-urile oprite rămân în registrul global.
+    tasks.forEach(t => t.destroy());
     activeTasks.delete(connectionId);
   }
 }
@@ -85,19 +88,22 @@ async function runScheduledBackup(connectionId: string, type: 'full' | 'incremen
         const msg = 'Nu există backup full anterior.';
         db.prepare("UPDATE backups SET status='failed', error_message=?, completed_at=datetime('now') WHERE id=?")
           .run(msg, backupId);
-        notifyBackupFailure({ serverName: conn.name, type, error: msg, scheduled: true });
+        notifyBackupFailure({ connectionId: conn.id, serverName: conn.name, type, error: msg, scheduled: true });
         return;
       }
       result = await performIncrementalBackup(conn, conn.name, backupId, lastBackup.binlog_file, lastBackup.binlog_pos);
     }
 
+    if (result.success) result = await storeBackup(conn, type, result, backupId);
     const logStr = flushLogs(backupId);
 
     if (result.success) {
       db.prepare(`
-        UPDATE backups SET status='success', file_path=?, file_size=?, binlog_file=?, binlog_pos=?, logs=?, completed_at=datetime('now')
+        UPDATE backups SET status='success', file_path=?, file_size=?, binlog_file=?, binlog_pos=?, logs=?,
+          storage_type=?, remote_path=?, storage_error=?, completed_at=datetime('now')
         WHERE id=?
-      `).run(result.filePath ?? null, result.fileSize ?? null, result.binlogFile ?? null, result.binlogPos ?? null, logStr, backupId);
+      `).run(result.filePath ?? null, result.fileSize ?? null, result.binlogFile ?? null, result.binlogPos ?? null, logStr,
+        result.storageType ?? null, result.remotePath ?? null, result.storageError ?? null, backupId);
 
       const schedule = db.prepare('SELECT * FROM schedules WHERE connection_id = ?').get(connectionId) as Schedule | undefined;
       if (schedule && type === 'full') {
@@ -106,12 +112,14 @@ async function runScheduledBackup(connectionId: string, type: 'full' | 'incremen
     } else {
       db.prepare("UPDATE backups SET status='failed', error_message=?, logs=?, completed_at=datetime('now') WHERE id=?")
         .run(result.error ?? 'Eroare', logStr, backupId);
-      notifyBackupFailure({ serverName: conn.name, type, error: result.error ?? 'Eroare', scheduled: true });
+      notifyBackupFailure({ connectionId: conn.id, serverName: conn.name, type, error: result.error ?? 'Eroare', scheduled: true });
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     db.prepare("UPDATE backups SET status='failed', error_message=?, completed_at=datetime('now') WHERE id=?")
       .run(message, backupId);
-    notifyBackupFailure({ serverName: conn.name, type, error: message, scheduled: true });
+    notifyBackupFailure({ connectionId: conn.id, serverName: conn.name, type, error: message, scheduled: true });
+  } finally {
+    checkDiskSpace(conn.name);
   }
 }

@@ -1,6 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { getSlackWebhookUrl, setSlackWebhookUrl, testSlackWebhook } from '../services/notificationService';
 import { getSetting } from '../db/database';
+import { getDiskAlertMinFreeGb, setDiskAlertMinFreeGb } from '../services/diskService';
+import {
+  getDefaultStorageConfig, setDefaultStorageConfig, maskStorageConfig, parseStorageConfigInput, testStorage,
+} from '../services/storageService';
+import { StorageConfig } from '../types';
 
 const router = Router();
 
@@ -13,21 +18,64 @@ router.get('/', (_req: Request, res: Response) => {
     slackWebhookUrl: fromDb || '',
     slackWebhookConfigured: !!active,
     slackWebhookSource: fromDb ? 'db' : (active ? 'env' : 'none'),
+    diskAlertMinFreeGb: getDiskAlertMinFreeGb(),
+    storageDefault: maskStorageConfig(getDefaultStorageConfig()),
   });
 });
 
-// Salvează webhook-ul Slack (string gol = dezactivează notificările din DB).
+// Salvează setările trimise. Câmpurile lipsă rămân neschimbate.
+// slackWebhookUrl: string gol = dezactivează notificările din DB.
+// diskAlertMinFreeGb: număr de GB; null sau 0 = dezactivează alerta de spațiu.
+// storageDefault: destinația implicită a backup-urilor (StorageConfig); secretele mascate se păstrează.
 router.put('/', (req: Request, res: Response) => {
-  const { slackWebhookUrl } = req.body || {};
-  if (typeof slackWebhookUrl !== 'string') {
-    return res.status(400).json({ error: 'slackWebhookUrl trebuie să fie un string.' });
+  const { slackWebhookUrl, diskAlertMinFreeGb, storageDefault } = req.body || {};
+  if (slackWebhookUrl === undefined && diskAlertMinFreeGb === undefined && storageDefault === undefined) {
+    return res.status(400).json({ error: 'Nicio setare trimisă.' });
   }
-  const url = slackWebhookUrl.trim();
-  if (url && !/^https:\/\/hooks\.slack\.com\//.test(url)) {
-    return res.status(400).json({ error: 'URL invalid. Trebuie să fie un Slack Incoming Webhook (https://hooks.slack.com/...).' });
+
+  let storage: StorageConfig | undefined;
+  if (storageDefault !== undefined) {
+    const parsed = parseStorageConfigInput(storageDefault, getDefaultStorageConfig());
+    if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+    storage = parsed.config;
   }
-  setSlackWebhookUrl(url);
-  res.json({ success: true, slackWebhookConfigured: !!getSlackWebhookUrl() });
+
+  let url: string | undefined;
+  if (slackWebhookUrl !== undefined) {
+    if (typeof slackWebhookUrl !== 'string') {
+      return res.status(400).json({ error: 'slackWebhookUrl trebuie să fie un string.' });
+    }
+    url = slackWebhookUrl.trim();
+    if (url && !/^https:\/\/hooks\.slack\.com\//.test(url)) {
+      return res.status(400).json({ error: 'URL invalid. Trebuie să fie un Slack Incoming Webhook (https://hooks.slack.com/...).' });
+    }
+  }
+
+  if (diskAlertMinFreeGb !== undefined && diskAlertMinFreeGb !== null &&
+      (typeof diskAlertMinFreeGb !== 'number' || !Number.isFinite(diskAlertMinFreeGb) || diskAlertMinFreeGb < 0)) {
+    return res.status(400).json({ error: 'Limita de spațiu trebuie să fie un număr de GB ≥ 0 (0 sau gol = dezactivat).' });
+  }
+
+  if (url !== undefined) setSlackWebhookUrl(url);
+  if (diskAlertMinFreeGb !== undefined) setDiskAlertMinFreeGb(diskAlertMinFreeGb);
+  if (storage) setDefaultStorageConfig(storage);
+  res.json({
+    success: true,
+    slackWebhookConfigured: !!getSlackWebhookUrl(),
+    diskAlertMinFreeGb: getDiskAlertMinFreeGb(),
+    storageDefault: maskStorageConfig(getDefaultStorageConfig()),
+  });
+});
+
+// Testează destinația din formular (nesalvată); secretele mascate se iau din configurația salvată.
+router.post('/storage/test', async (req: Request, res: Response) => {
+  const parsed = parseStorageConfigInput(req.body?.config, getDefaultStorageConfig());
+  if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+  try {
+    res.json({ success: true, message: await testStorage(parsed.config) });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Test eșuat.' });
+  }
 });
 
 // Trimite un mesaj de test către webhook-ul configurat.

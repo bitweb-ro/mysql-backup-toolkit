@@ -4,6 +4,7 @@ import { api } from '../api';
 import { Backup, Connection, BackupListResponse } from '../types';
 import { formatBytes, formatDate, formatRelative } from '../utils';
 import LogViewer from '../components/LogViewer';
+import { storageTypeLabel } from '../components/StorageConfigForm';
 
 export default function RestorePage() {
   const { id } = useParams<{ id: string }>();
@@ -82,8 +83,7 @@ export default function RestorePage() {
       <div className="page-header">
         <div className="page-header-row">
           <div>
-            <h2>Restore — {conn.name}</h2>
-            <p className="mono">{conn.user}@{conn.host}:{conn.port}/{conn.database_name}</p>
+            <h2>Restore</h2>
           </div>
         </div>
       </div>
@@ -190,7 +190,12 @@ function RestoreRow({ backup: b, index, isFirst, confirming, restoring, onRestor
         <div>{formatDate(b.started_at)}</div>
         <div className="meta">{formatRelative(b.started_at)}</div>
       </td>
-      <td className="mono">{b.file_size ? formatBytes(b.file_size) : '—'}</td>
+      <td className="mono">
+        {b.file_size ? formatBytes(b.file_size) : '—'}
+        {!b.file_path && b.remote_path && (
+          <div className="meta" title="Fișierul se descarcă temporar înainte de restaurare">pe {storageTypeLabel(b.storage_type)}</div>
+        )}
+      </td>
       <td className="mono">{b.binlog_file ? `${b.binlog_file} pos ${b.binlog_pos}` : '—'}</td>
       <td style={{ textAlign: 'right', minWidth: 200 }}>
         {confirming ? (

@@ -4,6 +4,7 @@ import { api } from '../api';
 import { Backup, Connection, BackupListResponse } from '../types';
 import { formatBytes, formatDate, formatRelative } from '../utils';
 import LogViewer from '../components/LogViewer';
+import { storageTypeLabel } from '../components/StorageConfigForm';
 
 export default function BackupPage() {
   const { id } = useParams<{ id: string }>();
@@ -80,7 +81,8 @@ export default function BackupPage() {
   const deleteBackup = async (backupId: string) => {
     if (!id || !confirm('Ștergi definitiv acest backup?')) return;
     try {
-      await api.deleteBackup(id, backupId);
+      const r = await api.deleteBackup(id, backupId);
+      if (r.warning) setAlert({ type: 'error', msg: `Backup șters din listă, dar: ${r.warning}` });
       load();
     } catch (e: unknown) {
       setAlert({ type: 'error', msg: e instanceof Error ? e.message : 'Eroare la ștergere' });
@@ -110,8 +112,7 @@ export default function BackupPage() {
       <div className="page-header">
         <div className="page-header-row">
           <div>
-            <h2>Backup — {conn.name}</h2>
-            <p className="mono">{conn.user}@{conn.host}:{conn.port}/{conn.database_name}</p>
+            <h2>Backup</h2>
           </div>
           <div className="page-actions">
             <button className="btn btn-secondary" onClick={() => runBackup('incremental')} disabled={isRunning}>
@@ -227,7 +228,12 @@ export default function BackupPage() {
 function BackupRow({ backup: b, connectionId, onDelete, onShowLogs }: {
   backup: Backup; connectionId: string; onDelete: () => void; onShowLogs: () => void;
 }) {
-  const fileName = b.file_path ? b.file_path.split('/').pop() || '' : '';
+  const storedPath = b.file_path || b.remote_path || '';
+  const fileName = storedPath.split('/').pop() || '';
+  const remote = !!b.remote_path && !!b.storage_type && b.storage_type !== 'local';
+  const location = remote
+    ? `${storageTypeLabel(b.storage_type)}${b.file_path ? ' + local' : ''}`
+    : 'Local';
   const hasLogs = !!(b.logs && b.logs.trim());
   const [downloading, setDownloading] = useState(false);
 
@@ -241,26 +247,31 @@ function BackupRow({ backup: b, connectionId, onDelete, onShowLogs }: {
             {b.error_message}
           </div>
         )}
+        {b.storage_error && (
+          <div className="meta" style={{ color: 'var(--amber)', marginTop: 2, whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.4 }}>
+            ⚠ {b.storage_error}
+          </div>
+        )}
       </td>
       <td className="mono">{b.file_size ? formatBytes(b.file_size) : '—'}</td>
       <td className="mono">{b.binlog_file ? `${b.binlog_file}:${b.binlog_pos}` : '—'}</td>
-      <td className="mono" style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={fileName}>
+      <td className="mono" style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={storedPath}>
         {fileName || '—'}
+        {b.status === 'success' && <div className="meta">{location}</div>}
       </td>
       <td style={{ textAlign: 'right', whiteSpace: 'nowrap', display: 'flex', gap: 4, justifyContent: 'flex-end', alignItems: 'center' }}>
         {hasLogs && (
           <button className="btn btn-ghost btn-sm" onClick={onShowLogs}>Jurnal</button>
         )}
-        {b.status === 'success' && b.file_path && (
+        {b.status === 'success' && storedPath && (
           <button
             className="btn btn-secondary btn-sm"
-            title="Descarcă fișier backup"
+            title={b.file_path ? 'Descarcă fișier backup' : `Descarcă fișier backup (de pe ${storageTypeLabel(b.storage_type)})`}
             disabled={downloading}
             onClick={async () => {
-              const fileName = b.file_path!.split('/').pop() || 'backup.sql.gz';
               setDownloading(true);
               try {
-                await api.downloadBackup(connectionId, b.id, fileName);
+                await api.downloadBackup(connectionId, b.id, fileName || 'backup.sql.gz');
               } catch (e) {
                 console.error(e);
               } finally {

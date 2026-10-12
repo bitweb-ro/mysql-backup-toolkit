@@ -84,6 +84,23 @@ function runMigrations() {
   if (!backupCols.includes('logs')) {
     db.exec('ALTER TABLE backups ADD COLUMN logs TEXT');
   }
+  // Destinația fișierului: 'local' / 'sftp' / 'ftp' / 's3'. NULL = backup vechi, local.
+  if (!backupCols.includes('storage_type')) {
+    db.exec('ALTER TABLE backups ADD COLUMN storage_type TEXT');
+  }
+  // Calea fișierului pe destinația remote (cheia S3 pentru S3).
+  if (!backupCols.includes('remote_path')) {
+    db.exec('ALTER TABLE backups ADD COLUMN remote_path TEXT');
+  }
+  // Eroarea de upload, dacă backup-ul a reușit local dar nu a ajuns pe destinația remote.
+  if (!backupCols.includes('storage_error')) {
+    db.exec('ALTER TABLE backups ADD COLUMN storage_error TEXT');
+  }
+
+  const connectionCols = (db.prepare('PRAGMA table_info(connections)').all() as { name: string }[]).map(c => c.name);
+  if (!connectionCols.includes('storage_config')) {
+    db.exec('ALTER TABLE connections ADD COLUMN storage_config TEXT');
+  }
 
   const scheduleCols = (db.prepare('PRAGMA table_info(schedules)').all() as { name: string }[]).map(c => c.name);
   if (!scheduleCols.includes('retention_days')) {

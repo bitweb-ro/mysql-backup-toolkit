@@ -1,19 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../api';
-import { DashboardStat, Connection } from '../types';
-import { formatRelative, formatTime } from '../utils';
+import { api, onConnectionsChanged } from '../api';
+import { DashboardStat, Connection, DiskInfo } from '../types';
+import { formatBytes, formatRelative, formatTime } from '../utils';
 import ConnectionModal from '../components/ConnectionModal';
 import ServerOptionsMenu from '../components/ServerOptionsMenu';
 
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStat[]>([]);
+  const [disk, setDisk] = useState<DiskInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [search, setSearch] = useState('');
   const navigate = useNavigate();
 
   const load = useCallback(async () => {
+    api.getDiskInfo().then(setDisk).catch(() => setDisk(null));
     try { setStats(await api.getDashboard()); } catch { /* silent */ }
     finally { setLoading(false); }
   }, []);
@@ -21,13 +23,13 @@ export default function Dashboard() {
   useEffect(() => {
     load();
     const t = setInterval(load, 10000);
-    return () => clearInterval(t);
+    const off = onConnectionsChanged(load);
+    return () => { clearInterval(t); off(); };
   }, [load]);
 
   const handleSaved = (conn: Connection) => {
     setShowModal(false);
-    load();
-    navigate(`/server/${conn.id}/backup`);
+    navigate(`/server/${conn.id}/dashboard`);
   };
 
   if (loading) {
@@ -72,6 +74,7 @@ export default function Dashboard() {
       </div>
 
       <div className="page-content">
+        {disk && <DiskPanel disk={disk} />}
         {stats.length === 0 ? (
           <div className="empty">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -100,12 +103,42 @@ export default function Dashboard() {
   );
 }
 
+function DiskPanel({ disk }: { disk: DiskInfo }) {
+  const color = disk.low ? 'var(--red)' : disk.usedPercent >= 85 ? 'var(--amber)' : 'var(--green)';
+
+  return (
+    <div className="conn-card" style={{ marginBottom: 20, cursor: 'default', borderColor: disk.low ? 'var(--red)' : undefined }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+        <div className="conn-name">💾 Spațiu disc backup-uri</div>
+        <div style={{ fontSize: 13, color: 'var(--text2)' }}>
+          <strong style={{ color }}>{formatBytes(disk.freeBytes)} liberi</strong>
+          {' '}din {formatBytes(disk.totalBytes)} ({disk.usedPercent}% folosit)
+        </div>
+      </div>
+      <div style={{ height: 8, background: 'var(--bg4)', borderRadius: 4, marginTop: 10, overflow: 'hidden' }}>
+        <div style={{ width: `${Math.min(disk.usedPercent, 100)}%`, height: '100%', background: color }} />
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
+        {disk.alertMinFreeGb
+          ? `Alertă Slack când spațiul liber scade sub ${disk.alertMinFreeGb} GB (verificat după fiecare backup).`
+          : 'Alertă de spațiu dezactivată — se poate seta din Opțiuni.'}
+      </div>
+      {disk.low && (
+        <div className="alert error" style={{ marginTop: 10, marginBottom: 0 }}>
+          Spațiul liber este sub limita de {disk.alertMinFreeGb} GB. Backup-urile noi pot eșua — eliberează spațiu
+          sau redu retenția din programări.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DashboardCard({ stat, onChanged }: { stat: DashboardStat; onChanged: () => void }) {
   const navigate = useNavigate();
   const { connection: conn, lastFull, todayIncrementals, runningBackup, totalBackups } = stat;
 
   return (
-    <div className="conn-card" onClick={() => navigate(`/server/${conn.id}/backup`)}>
+    <div className="conn-card" onClick={() => navigate(`/server/${conn.id}/dashboard`)}>
       <div className="conn-card-top">
         <div>
           <div className="conn-name">{conn.name}</div>

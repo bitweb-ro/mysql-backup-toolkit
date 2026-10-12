@@ -21,6 +21,9 @@ export interface Backup {
   binlog_pos?: number;
   error_message?: string;
   logs?: string;
+  storage_type?: StorageType | null;
+  remote_path?: string | null;
+  storage_error?: string | null;
   liveLines?: string[];
   started_at: string;
   completed_at?: string;
@@ -50,6 +53,7 @@ export interface DashboardStat {
   todayIncrementals: Backup[];
   runningBackup: { id: string; type: string } | null;
   totalBackups: number;
+  lastBackupAt: string | null;
 }
 
 export interface BackupFile {
@@ -71,6 +75,62 @@ export interface PlatformSettings {
   slackWebhookUrl: string;
   slackWebhookConfigured: boolean;
   slackWebhookSource: 'db' | 'env' | 'none';
+  diskAlertMinFreeGb: number | null;
+  storageDefault: StorageConfig;
+}
+
+export type StorageType = 'local' | 'sftp' | 'ftp' | 's3';
+
+export interface StorageConfig {
+  type: StorageType;
+  keepLocal: boolean;
+  sftp?: {
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    privateKey: string;
+    passphrase: string;
+    remoteDir: string;
+  };
+  ftp?: {
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    secure: boolean;
+    remoteDir: string;
+  };
+  s3?: {
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    prefix: string;
+    forcePathStyle: boolean;
+  };
+}
+
+export interface ServerStorage {
+  config: StorageConfig | null;
+  defaultDescription: string;
+  activeDescription: string;
+}
+
+export interface ServerSlack {
+  slackWebhookUrl: string;
+  globalConfigured: boolean;
+}
+
+export interface DiskInfo {
+  path: string;
+  totalBytes: number;
+  freeBytes: number;
+  usedBytes: number;
+  usedPercent: number;
+  alertMinFreeGb: number | null;
+  low: boolean;
 }
 
 export interface ValidationResult {

@@ -1,5 +1,5 @@
 # ─── Stage: extract MySQL 8.0 client tools ────────────────────────
-# mysql:8.0-bookworm is the same Debian Bookworm base as node:20-bookworm-slim,
+# mysql:8.0-bookworm is the same Debian Bookworm base as node:24-bookworm-slim,
 # so shared system libs are compatible. We copy the binaries + MySQL-specific
 # libs (libmysqlclient) into a staging dir.
 FROM mysql:8.0-bookworm AS mysql-tools
@@ -12,7 +12,7 @@ RUN mkdir -p /export/bin /export/lib \
     && true
 
 # ─── Base image ───────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS base
+FROM node:24-bookworm-slim AS base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \

@@ -55,7 +55,7 @@ services:
         condition: service_healthy
 
   frontend:
-    image: node:20-bookworm-slim
+    image: node:24-bookworm-slim
     container_name: mysql-backup-frontend-dev
     restart: unless-stopped
     working_dir: /app/frontend

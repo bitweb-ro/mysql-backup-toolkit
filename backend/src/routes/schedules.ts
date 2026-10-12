@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'crypto';
 import cron from 'node-cron';
 import { getDb } from '../db/database';
 import { registerSchedule, unregisterSchedule } from '../services/schedulerService';

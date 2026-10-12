@@ -1,8 +1,21 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/database';
 import { Connection, Backup } from '../types';
+import { getDiskUsage, getDiskAlertMinFreeGb, isDiskLow } from '../services/diskService';
+import { publicConnection } from './connections';
 
 const router = Router();
+
+// Spațiul pe discul unde se salvează backup-urile + limita de alertă din Opțiuni.
+router.get('/disk', async (_req: Request, res: Response) => {
+  try {
+    const usage = await getDiskUsage();
+    const minFreeGb = getDiskAlertMinFreeGb();
+    res.json({ ...usage, alertMinFreeGb: minFreeGb, low: isDiskLow(usage, minFreeGb) });
+  } catch (err) {
+    res.status(500).json({ error: `Nu s-a putut citi spațiul pe disc: ${err instanceof Error ? err.message : String(err)}` });
+  }
+});
 
 router.get('/', (_req: Request, res: Response) => {
   const db = getDb();
@@ -31,12 +44,18 @@ router.get('/', (_req: Request, res: Response) => {
       SELECT COUNT(*) as count FROM backups WHERE connection_id = ? AND status = 'success'
     `).get(conn.id) as { count: number };
 
+    // Ultimul backup reușit, full sau incremental: folosit pentru culoarea de stare din sidebar.
+    const lastBackup = db.prepare(`
+      SELECT MAX(completed_at) as at FROM backups WHERE connection_id = ? AND status = 'success'
+    `).get(conn.id) as { at: string | null };
+
     return {
-      connection: conn,
+      connection: publicConnection(conn),
       lastFull: lastFull || null,
       todayIncrementals,
       runningBackup: runningBackup || null,
-      totalBackups: totalBackups.count
+      totalBackups: totalBackups.count,
+      lastBackupAt: lastBackup.at
     };
   });
 

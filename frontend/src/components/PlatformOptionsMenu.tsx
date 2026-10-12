@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { api } from '../api';
-import type { PlatformSettings } from '../types';
+import type { PlatformSettings, StorageConfig } from '../types';
+import StorageConfigForm, { withStorageDefaults, storageTypeLabel, missingStorageFields } from './StorageConfigForm';
 
 export default function PlatformOptionsMenu() {
   const [showModal, setShowModal] = useState(false);
@@ -22,6 +23,7 @@ export default function PlatformOptionsMenu() {
 
 function PlatformOptionsModal({ onClose }: { onClose: () => void }) {
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [tab, setTab] = useState<'general' | 'storage'>('general');
   const [exporting, setExporting] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -29,10 +31,12 @@ function PlatformOptionsModal({ onClose }: { onClose: () => void }) {
   const [webhookUrl, setWebhookUrl] = useState('');
   const [savingWebhook, setSavingWebhook] = useState(false);
   const [testingWebhook, setTestingWebhook] = useState(false);
+  const [diskLimit, setDiskLimit] = useState('');
+  const [savingDiskLimit, setSavingDiskLimit] = useState(false);
 
   useEffect(() => {
     api.getSettings()
-      .then(s => { setSettings(s); setWebhookUrl(s.slackWebhookUrl); })
+      .then(s => { setSettings(s); setWebhookUrl(s.slackWebhookUrl); setDiskLimit(s.diskAlertMinFreeGb ? String(s.diskAlertMinFreeGb) : ''); })
       .catch(() => { /* setările sunt opționale; ignoră eroarea de încărcare */ });
   }, []);
 
@@ -60,6 +64,28 @@ function PlatformOptionsModal({ onClose }: { onClose: () => void }) {
       setAlert({ type: 'error', msg: e instanceof Error ? e.message : 'Test eșuat' });
     } finally {
       setTestingWebhook(false);
+    }
+  };
+
+  const handleSaveDiskLimit = async () => {
+    const value = diskLimit.trim() ? Number(diskLimit.replace(',', '.')) : null;
+    if (value !== null && (!Number.isFinite(value) || value < 0)) {
+      setAlert({ type: 'error', msg: 'Limita trebuie să fie un număr de GB ≥ 0.' });
+      return;
+    }
+    setSavingDiskLimit(true);
+    setAlert(null);
+    try {
+      const r = await api.updateSettings({ diskAlertMinFreeGb: value });
+      setSettings(s => s ? { ...s, diskAlertMinFreeGb: r.diskAlertMinFreeGb } : s);
+      setDiskLimit(r.diskAlertMinFreeGb ? String(r.diskAlertMinFreeGb) : '');
+      setAlert({ type: 'success', msg: r.diskAlertMinFreeGb
+        ? `Limită salvată: alertă când spațiul liber scade sub ${r.diskAlertMinFreeGb} GB.`
+        : 'Alerta de spațiu pe disc este dezactivată.' });
+    } catch (e) {
+      setAlert({ type: 'error', msg: e instanceof Error ? e.message : 'Eroare la salvarea limitei' });
+    } finally {
+      setSavingDiskLimit(false);
     }
   };
 
@@ -96,12 +122,28 @@ function PlatformOptionsModal({ onClose }: { onClose: () => void }) {
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
 
+        <div className="tabs">
+          <button className={`tab ${tab === 'general' ? 'active' : ''}`} onClick={() => { setTab('general'); setAlert(null); }}>
+            General
+          </button>
+          <button className={`tab ${tab === 'storage' ? 'active' : ''}`} onClick={() => { setTab('storage'); setAlert(null); }}>
+            Stocare backup
+          </button>
+        </div>
+
         {alert && (
           <div className={`alert ${alert.type}`} style={{ marginBottom: 16 }}>
             {alert.msg}
           </div>
         )}
 
+        {tab === 'storage' && (
+          settings
+            ? <DefaultStorageTab initial={settings.storageDefault} onAlert={setAlert} />
+            : <div style={{ textAlign: 'center', padding: 20 }}><span className="spinner" /></div>
+        )}
+
+        {tab === 'general' && (<>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <button className="btn btn-secondary" style={{ justifyContent: 'flex-start' }} onClick={handleExport} disabled={exporting}>
             {exporting ? '… Se exportă' : '↑ Exportă configurațiile serverelor'}
@@ -141,7 +183,103 @@ function PlatformOptionsModal({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         </div>
+
+        <div style={{ borderTop: '1px solid var(--border, #2a2a2a)', marginTop: 20, paddingTop: 16 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Alertă spațiu pe disc</div>
+          <p style={{ fontSize: 13, opacity: 0.75, marginTop: 0, marginBottom: 10 }}>
+            După terminarea fiecărui backup (reușit sau eșuat) se verifică spațiul liber pe discul
+            de backup. Dacă scade sub limita de mai jos, se trimite o alertă pe Slack (o singură dată,
+            plus un mesaj când spațiul revine peste limită). Lasă gol sau 0 pentru a dezactiva.
+          </p>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="number"
+              min={0}
+              step="any"
+              style={{ width: 140 }}
+              placeholder="ex: 20"
+              value={diskLimit}
+              onChange={e => setDiskLimit(e.target.value)}
+            />
+            <span style={{ fontSize: 13, opacity: 0.75 }}>GB liberi minim</span>
+            <button className="btn btn-primary btn-sm" onClick={handleSaveDiskLimit} disabled={savingDiskLimit}>
+              {savingDiskLimit ? '… Se salvează' : 'Salvează'}
+            </button>
+          </div>
+          {settings?.diskAlertMinFreeGb && !settings.slackWebhookConfigured && (
+            <p style={{ fontSize: 12, opacity: 0.7, margin: '6px 0 0' }}>
+              Niciun webhook Slack configurat — alerta va apărea doar în Dashboard.
+            </p>
+          )}
+        </div>
+        </>)}
       </div>
     </div>
+  );
+}
+
+// Destinația implicită pentru backup-uri; serverele fără configurare proprie o folosesc.
+function DefaultStorageTab({ initial, onAlert }: {
+  initial: StorageConfig;
+  onAlert: (a: { type: 'success' | 'error'; msg: string } | null) => void;
+}) {
+  const [config, setConfig] = useState(() => withStorageDefaults(initial));
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [showRequired, setShowRequired] = useState(false);
+
+  // Marchează câmpurile obligatorii goale; true = se poate continua.
+  const checkRequired = () => {
+    setShowRequired(true);
+    if (missingStorageFields(config).length === 0) return true;
+    onAlert({ type: 'error', msg: 'Completează câmpurile obligatorii marcate cu roșu.' });
+    return false;
+  };
+
+  const handleSave = async () => {
+    if (!checkRequired()) return;
+    setSaving(true);
+    onAlert(null);
+    try {
+      const r = await api.updateSettings({ storageDefault: config });
+      setConfig(withStorageDefaults(r.storageDefault));
+      onAlert({ type: 'success', msg: `Destinație implicită salvată: ${storageTypeLabel(r.storageDefault.type)}. Se aplică de la următorul backup.` });
+    } catch (e) {
+      onAlert({ type: 'error', msg: e instanceof Error ? e.message : 'Eroare la salvare' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    if (!checkRequired()) return;
+    setTesting(true);
+    onAlert(null);
+    try {
+      const r = await api.testDefaultStorage(config);
+      onAlert({ type: 'success', msg: r.message });
+    } catch (e) {
+      onAlert({ type: 'error', msg: e instanceof Error ? e.message : 'Test eșuat' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <>
+      <p style={{ fontSize: 13, opacity: 0.75, marginTop: 0, marginBottom: 14 }}>
+        Destinația implicită pentru backup-urile tuturor serverelor. Fiecare server poate avea
+        propria destinație din meniul lui (⋮ → Stocare backup).
+      </p>
+      <StorageConfigForm value={config} onChange={setConfig} showRequired={showRequired} />
+      <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+        <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving}>
+          {saving ? '… Se salvează' : 'Salvează'}
+        </button>
+        <button className="btn btn-secondary btn-sm" onClick={handleTest} disabled={testing}>
+          {testing ? '… Se testează' : 'Testează conexiunea'}
+        </button>
+      </div>
+    </>
   );
 }
