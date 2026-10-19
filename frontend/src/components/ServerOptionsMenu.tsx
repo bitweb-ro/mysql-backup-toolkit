@@ -33,12 +33,12 @@ function ServerOptionsModal({ conn, onClose, onDeleted }: { conn: Connection; on
   const titles: Record<typeof view, string> = {
     menu: 'Opțiuni server',
     delete: 'Șterge server',
-    privileges: 'Testează drepturile',
+    privileges: 'Testează drepturile și configurațiile',
   };
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
+      <div className="modal" style={view === 'privileges' ? { maxWidth: 680 } : undefined} onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <span className="modal-title">{titles[view]}</span>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
@@ -47,7 +47,7 @@ function ServerOptionsModal({ conn, onClose, onDeleted }: { conn: Connection; on
         {view === 'menu' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <button className="btn btn-secondary" style={{ justifyContent: 'flex-start' }} onClick={() => setView('privileges')}>
-              🔍 Testează drepturile
+              🔍 Testează drepturile și configurațiile
             </button>
             <button className="btn btn-danger" style={{ justifyContent: 'flex-start' }} onClick={() => setView('delete')}>
               Șterge acest server

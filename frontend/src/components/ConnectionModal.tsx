@@ -238,14 +238,16 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
               <div
                 style={{ fontSize: 12, color: "var(--text3)", lineHeight: 1.6 }}
               >
-                <strong>Backup full:</strong> SELECT, LOCK TABLES, SHOW VIEW,
-                EVENT, TRIGGER, RELOAD
+                <strong>Backup full:</strong> SELECT, SHOW VIEW, TRIGGER, EVENT
+                pe baza de date. Pe servere cu GTID activ, și RELOAD (sau
+                FLUSH_TABLES), dacă nu e activă opțiunea „Fără GTID în backup”
+                din tab-ul Setări.
                 <br />
-                <strong>Backup incremental:</strong> toate cele de mai sus +
-                REPLICATION CLIENT (necesar pentru SHOW BINARY LOG STATUS /
-                MASTER STATUS) — binary logging (
-                <span className="mono">log_bin</span>) trebuie să fie activ pe
-                server.
+                <strong>Backup incremental:</strong> în plus RELOAD (FLUSH LOGS),
+                REPLICATION CLIENT (poziția binlog; pe MariaDB 10.5+ BINLOG
+                MONITOR) și REPLICATION SLAVE (citirea binlog-ului prin rețea).
+                Binary logging (<span className="mono">log_bin</span>) trebuie
+                să fie activ pe server.
               </div>
               <div
                 className="alert error"
@@ -293,14 +295,15 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
                   wordBreak: "break-all",
                 }}
               >
-                {`GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER ON \`${form.database_name || "baza_de_date"}\`.* TO \`${form.user || "utilizator"}\`@\`%\`;`}
+                {`GRANT SELECT, SHOW VIEW, TRIGGER, EVENT ON \`${form.database_name || "baza_de_date"}\`.* TO \`${form.user || "utilizator"}\`@\`%\`;`}
               </pre>
               <div
                 style={{ marginTop: 8, fontSize: 12, color: "var(--text3)" }}
               >
-                <strong>Pas 3 — drepturi globale</strong> (RELOAD și REPLICATION
-                CLIENT sunt privilegii administrative, nu se pot da pe o singură
-                bază de date — necesită <span className="mono">ON *.*</span>):
+                <strong>Pas 3 — drepturi globale</strong> (RELOAD, REPLICATION
+                CLIENT și REPLICATION SLAVE sunt privilegii administrative, nu se
+                pot da pe o singură bază de date — necesită{" "}
+                <span className="mono">ON *.*</span>):
               </div>
               <pre
                 className="mono"
@@ -314,7 +317,7 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
                   wordBreak: "break-all",
                 }}
               >
-                {`GRANT RELOAD, REPLICATION CLIENT ON *.* TO \`${form.user || "utilizator"}\`@\`%\`;\nFLUSH PRIVILEGES;`}
+                {`GRANT RELOAD, REPLICATION CLIENT, REPLICATION SLAVE ON *.* TO \`${form.user || "utilizator"}\`@\`%\`;\nFLUSH PRIVILEGES;`}
               </pre>
             </div>
           )}
@@ -328,7 +331,7 @@ export default function ConnectionModal({ existing, onClose, onSaved }: Props) {
             onClick={handleTestPrivileges}
             disabled={validating}
           >
-            {validating ? <span className="spinner" /> : ""} Testează drepturile
+            {validating ? <span className="spinner" /> : ""} Testează drepturile și configurațiile
           </button>
           {savedConn && (
             <>

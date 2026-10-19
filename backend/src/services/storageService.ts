@@ -276,8 +276,22 @@ async function withS3<T>(c: S3Storage, fn: (d: RemoteDriver) => Promise<T>): Pro
   }
 }
 
+// Explicații pentru erorile SFTP frecvente (cauza e de obicei pe serverul destinație, nu în aplicație)
+const STORAGE_HINTS: [RegExp, string][] = [
+  [/Unable to start subsystem: sftp/i,
+    'Login-ul SSH reușește, dar serverul nu pornește SFTP pentru acest user. Pe server, în /etc/ssh/sshd_config: ' +
+    '„Subsystem sftp internal-sftp” (sau instalează pachetul openssh-sftp-server); dacă user-ul are un bloc „Match User”, ' +
+    'acolo trebuie „ForceCommand internal-sftp” sau niciun ForceCommand. Apoi: sudo sshd -t && sudo systemctl reload ssh.'],
+  [/All configured authentication methods failed/i,
+    'User, parolă sau cheie greșite, ori serverul SSH nu permite metoda folosită (ex: PasswordAuthentication no).'],
+  [/ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|Timed out while waiting for handshake/i,
+    'Serverul nu răspunde pe acest port: verifică host-ul, portul și firewall-ul pentru IP-ul aplicației.'],
+];
+
 function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  const message = err instanceof Error ? err.message : String(err);
+  const hint = STORAGE_HINTS.find(([re]) => re.test(message));
+  return hint ? `${message} — ${hint[1]}` : message;
 }
 
 function tmpDir(): string {

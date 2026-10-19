@@ -4,6 +4,7 @@ import { api } from '../api';
 import { Backup, Schedule } from '../types';
 import { formatBytes, formatDate, formatRelative, formatTime } from '../utils';
 import { storageTypeLabel } from '../components/StorageConfigForm';
+import { describeCron } from '../cron';
 
 // Tab-ul „Dashboard” al unui server: starea backup-urilor, programul, destinația, ultimele rulări.
 export default function ServerDashboard() {
@@ -97,8 +98,8 @@ export default function ServerDashboard() {
             {schedule ? (
               <div style={{ fontSize: 13, lineHeight: 1.8 }}>
                 <div>Status: <span className={`badge ${schedule.enabled ? 'success' : 'failed'}`}>{schedule.enabled ? 'activ' : 'oprit'}</span></div>
-                <div>Full: <span className="mono">{schedule.full_cron || '—'}</span></div>
-                <div>Incremental: <span className="mono">{schedule.incremental_cron || '—'}</span></div>
+                <div>Full: {describeCron(schedule.full_cron)}</div>
+                <div>Incremental: {describeCron(schedule.incremental_cron)}</div>
                 <div>Retenție: {schedule.retention_days} zile</div>
               </div>
             ) : (
@@ -132,6 +133,15 @@ export default function ServerDashboard() {
                           <div className="meta" style={{ color: b.error_message ? 'var(--red)' : 'var(--amber)', marginTop: 2, whiteSpace: 'normal', maxWidth: 320 }}>
                             {b.error_message || `⚠ ${b.storage_error}`}
                           </div>
+                        )}
+                        {b.status === 'failed' && (
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            style={{ marginTop: 4, padding: '2px 6px' }}
+                            onClick={() => navigate(`/server/${id}/logs?backup=${b.id}`)}
+                          >
+                            📜 Vezi jurnalul și cauza →
+                          </button>
                         )}
                       </td>
                       <td>

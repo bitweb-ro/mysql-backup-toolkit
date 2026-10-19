@@ -30,6 +30,9 @@ router.put('/:connectionId', (req: Request, res: Response) => {
   if (incremental_cron && !cron.validate(incremental_cron)) {
     return res.status(400).json({ error: `Expresia cron pentru incremental este invalidă: "${incremental_cron}"` });
   }
+  if (retention_days !== undefined && (!Number.isInteger(retention_days) || retention_days < 1 || retention_days > 3650)) {
+    return res.status(400).json({ error: 'Retenția trebuie să fie un număr întreg de zile, între 1 și 3650.' });
+  }
 
   const existing = db.prepare('SELECT * FROM schedules WHERE connection_id = ?').get(connectionId) as Schedule | undefined;
 

@@ -6,6 +6,9 @@ import {
   performIncrementalBackup,
   restoreFullBackup,
   restoreIncrementalBackup,
+  TARGET_DB_PATTERN,
+  isSystemDatabase,
+  countDatabaseTables,
   getBackupFiles,
   appendLog,
   getLogs,
@@ -124,10 +127,10 @@ router.post('/full', async (req: Request, res: Response) => {
       `).run(result.filePath ?? null, result.fileSize ?? null, result.binlogFile ?? null, result.binlogPos ?? null, logStr,
         result.storageType ?? null, result.remotePath ?? null, result.storageError ?? null, backupId);
 
-      // Run cleanup after successful full backup
+      // Curățare după backup reușit (retenția e pe lanțuri: full + incrementalele care depind de el)
       const schedule = db.prepare('SELECT * FROM schedules WHERE connection_id = ?').get(connectionId) as Schedule | undefined;
       if (schedule) {
-        await cleanupBackups(connectionId, conn.name, schedule.retention_days, !!schedule.cleanup_incrementals);
+        await cleanupBackups(connectionId, conn.name, schedule.retention_days, !!schedule.cleanup_incrementals, backupId);
       }
     } else {
       db.prepare(`
@@ -176,6 +179,11 @@ router.post('/incremental', async (req: Request, res: Response) => {
         WHERE id=?
       `).run(result.filePath ?? null, result.fileSize ?? null, result.binlogFile ?? null, result.binlogPos ?? null, logStr,
         result.storageType ?? null, result.remotePath ?? null, result.storageError ?? null, backupId);
+
+      const schedule = db.prepare('SELECT * FROM schedules WHERE connection_id = ?').get(connectionId) as Schedule | undefined;
+      if (schedule) {
+        await cleanupBackups(connectionId, conn.name, schedule.retention_days, !!schedule.cleanup_incrementals, backupId);
+      }
     } else {
       db.prepare(`
         UPDATE backups SET status='failed', error_message=?, logs=?, completed_at=datetime('now') WHERE id=?
@@ -199,6 +207,31 @@ router.post('/:backupId/restore/full', async (req: Request, res: Response) => {
   if (!backup) return res.status(404).json({ error: 'Full backup not found' });
   if (!backup.file_path && !backup.remote_path) return res.status(400).json({ error: 'Backup file path missing' });
 
+  // Restaurare de verificare într-o altă bază de pe același server (baza originală rămâne neatinsă)
+  const rawTarget = typeof req.body?.targetDatabase === 'string' ? req.body.targetDatabase.trim() : '';
+  const target = rawTarget && rawTarget !== conn.database_name ? rawTarget : undefined;
+  if (target) {
+    if (!TARGET_DB_PATTERN.test(target)) {
+      return res.status(400).json({ error: 'Nume de bază invalid: doar litere, cifre și _ (maxim 64 de caractere).' });
+    }
+    if (isSystemDatabase(target)) {
+      return res.status(400).json({ error: `'${target}' e o bază de sistem MySQL și nu poate fi destinație.` });
+    }
+    let tables: number | null;
+    try {
+      tables = await countDatabaseTables(conn, target);
+    } catch (err) {
+      const message = err instanceof Error ? err.message.split('\n').find(l => l.startsWith('ERROR')) || err.message : String(err);
+      return res.status(502).json({ error: `Nu pot verifica baza '${target}' pe server: ${message}` });
+    }
+    if (tables && tables > 0 && req.body?.overwrite !== true) {
+      return res.status(409).json({
+        error: `Baza '${target}' există deja și are ${tables} tabele / view-uri. Restaurarea le suprascrie pe cele din backup. ` +
+          'Alege alt nume sau bifează „Suprascrie baza existentă”.',
+      });
+    }
+  }
+
   const jobId = uuidv4();
   const job: RestoreJob = { status: 'running', logs: [], startedAt: new Date().toISOString() };
   restoreJobs.set(jobId, job);
@@ -206,10 +239,10 @@ router.post('/:backupId/restore/full', async (req: Request, res: Response) => {
   res.json({ jobId, status: 'running' });
 
   (async () => {
-    appendLog(jobId, `Pornire restaurare full pentru '${conn.database_name}'...`);
+    appendLog(jobId, `Pornire restaurare full pentru '${target || conn.database_name}'...`);
     job.logs = getLogs(jobId);
 
-    const result = await restoreFromStorage(connectionId, backup, jobId, fp => restoreFullBackup(conn, fp, jobId));
+    const result = await restoreFromStorage(connectionId, backup, jobId, fp => restoreFullBackup(conn, fp, jobId, target));
     const finalLogs = getLogs(jobId);
     flushLogs(jobId);
 
@@ -237,6 +270,15 @@ router.post('/:backupId/restore/incremental', async (req: Request, res: Response
     .get(req.params.backupId, connectionId) as Backup | undefined;
   if (!backup) return res.status(404).json({ error: 'Incremental backup not found' });
   if (!backup.file_path && !backup.remote_path) return res.status(400).json({ error: 'Backup file path missing' });
+
+  // Evenimentele binlog conțin numele bazei originale: aplicate „în altă bază”, ar modifica tot baza originală.
+  const target = typeof req.body?.targetDatabase === 'string' ? req.body.targetDatabase.trim() : '';
+  if (target && target !== conn.database_name) {
+    return res.status(400).json({
+      error: `Un backup incremental nu poate fi restaurat în altă bază: modificările din binlog conțin numele bazei ` +
+        `originale ('${conn.database_name}') și ar fi aplicate tot acolo. Restaurarea de verificare e disponibilă doar pentru backup-uri full.`,
+    });
+  }
 
   const jobId = uuidv4();
   const job: RestoreJob = { status: 'running', logs: [], startedAt: new Date().toISOString() };

@@ -3,7 +3,8 @@ services:
   # aplicația backup-uiește exclusiv servere MySQL externe. Se pornește doar
   # explicit cu: docker-compose --profile local-mysql up
   mysql:
-    image: mysql:8.0
+    # 8.4 = LTS. Altă versiune: MYSQL_TEST_IMAGE=mysql:8.0 în .env
+    image: ${MYSQL_TEST_IMAGE:-mysql:8.4}
     container_name: mysql-backup-db
     restart: unless-stopped
     profiles: ["local-mysql"]
@@ -19,11 +20,10 @@ services:
       - ./mysql-config:/etc/mysql/conf.d
     command: >
       --log-bin=mysql-bin
-      --binlog-format=ROW
       --server-id=1
       --gtid-mode=ON
       --enforce-gtid-consistency=ON
-      --expire-logs-days=7
+      --binlog-expire-logs-seconds=604800
     healthcheck:
       test:
         [
@@ -55,19 +55,15 @@ services:
     volumes:
       - app_data:/app/backend/data
       - ${BACKUP_PATH:-./backup_servers}:/app/backup_servers
+    # Imaginea nu are curl; se folosește node. Login cu body gol răspunde 401,
+    # deci orice status < 500 înseamnă că serverul HTTP funcționează.
     healthcheck:
       test:
         [
           "CMD",
-          "curl",
-          "-f",
-          "http://localhost:3001/api/auth/login",
-          "-X",
-          "POST",
-          "-H",
-          "Content-Type: application/json",
-          "-d",
-          "{}",
+          "node",
+          "-e",
+          "fetch('http://localhost:3001/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))",
         ]
       interval: 30s
       timeout: 10s

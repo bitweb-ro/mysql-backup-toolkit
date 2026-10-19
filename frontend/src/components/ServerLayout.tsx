@@ -9,6 +9,7 @@ const TABS = [
   { path: 'backup', label: '📦 Backup' },
   { path: 'restore', label: '↩ Restore' },
   { path: 'schedule', label: '🕐 Program' },
+  { path: 'logs', label: '📜 Log-uri' },
   { path: 'settings', label: '⚙️ Setări' },
 ];
 

@@ -1,6 +1,8 @@
 services:
   mysql:
-    image: mysql:8.0
+    # 8.4 = LTS. Pentru teste pe altă versiune: MYSQL_TEST_IMAGE=mysql:8.0 în .env
+    # (8.4 → 8.0 nu se poate pe același volum: șterge întâi volumul mysql_dev_data).
+    image: ${MYSQL_TEST_IMAGE:-mysql:8.4}
     container_name: mysql-backup-db-dev
     restart: unless-stopped
     environment:
@@ -15,11 +17,10 @@ services:
       - ./mysql-config:/etc/mysql/conf.d
     command: >
       --log-bin=mysql-bin
-      --binlog-format=ROW
       --server-id=1
       --gtid-mode=ON
       --enforce-gtid-consistency=ON
-      --expire-logs-days=7
+      --binlog-expire-logs-seconds=604800
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
       interval: 10s

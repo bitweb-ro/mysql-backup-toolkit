@@ -133,6 +133,17 @@ export interface DiskInfo {
   low: boolean;
 }
 
+export type CheckStatus = 'ok' | 'warn' | 'error' | 'info';
+
+export interface ValidationCheck {
+  group: 'Conexiune' | 'Privilegii' | 'Configurare server';
+  label: string;
+  status: CheckStatus;
+  detail?: string;
+  fix?: string;
+  affects: ('full' | 'incremental')[];
+}
+
 export interface ValidationResult {
   canConnect: boolean;
   mysqlVersion: string | null;
@@ -141,5 +152,14 @@ export interface ValidationResult {
   binlogFormat: string | null;
   incrementalSupported: boolean;
   databaseExists: boolean;
+  fullBackup: Exclude<CheckStatus, 'info'>;
+  incrementalBackup: Exclude<CheckStatus, 'info'>;
+  checks: ValidationCheck[];
   errors: string[];
+}
+
+// Opțiuni mysqldump per server (tab-ul Setări)
+export interface DumpOptions {
+  gtidPurgedOff: boolean;
+  maxAllowedPacket: boolean;
 }

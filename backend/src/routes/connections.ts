@@ -1,8 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { randomUUID as uuidv4 } from 'crypto';
 import fs from 'fs';
+import path from 'path';
 import { getDb } from '../db/database';
-import { testConnection, validateMySQLCapabilities, getServerDir } from '../services/backupService';
+import {
+  testConnection, validateMySQLCapabilities, getServerDir, getDumpOptions, setDumpOptions,
+} from '../services/backupService';
 import {
   getServerStorageConfig, getDefaultStorageConfig, maskStorageConfig, describeStorage,
   parseStorageConfigInput, testStorage, deleteStoredBackup, getLocalCopy,
@@ -84,6 +87,30 @@ router.post('/:id/slack/test', async (req: Request, res: Response) => {
   }
 });
 
+// Opțiunile mysqldump ale serverului (activate din tab-ul Setări, cu confirmare în UI).
+router.get('/:id/dump-options', (req: Request, res: Response) => {
+  const db = getDb();
+  const conn = db.prepare('SELECT id FROM connections WHERE id = ?').get(req.params.id);
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
+  res.json(getDumpOptions(req.params.id));
+});
+
+// Body parțial: { gtidPurgedOff?: boolean, maxAllowedPacket?: boolean }; câmpurile lipsă rămân neschimbate.
+router.put('/:id/dump-options', (req: Request, res: Response) => {
+  const db = getDb();
+  const conn = db.prepare('SELECT id FROM connections WHERE id = ?').get(req.params.id);
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
+  const body = req.body || {};
+  const current = getDumpOptions(req.params.id);
+  for (const key of ['gtidPurgedOff', 'maxAllowedPacket'] as const) {
+    if (body[key] === undefined) continue;
+    if (typeof body[key] !== 'boolean') return res.status(400).json({ error: `${key} trebuie să fie true sau false.` });
+    current[key] = body[key];
+  }
+  setDumpOptions(req.params.id, current);
+  res.json(current);
+});
+
 // Salvează destinația serverului. Body: { config: StorageConfig | null }; null = revine la implicită.
 router.put('/:id/storage', (req: Request, res: Response) => {
   const db = getDb();
@@ -145,6 +172,58 @@ router.put('/:id', (req: Request, res: Response) => {
   res.json(publicConnection(conn));
 });
 
+// Redenumește serverul. Folderul local de backup e derivat din nume, deci se mută și el,
+// împreună cu căile fișierelor din istoric. Pe destinațiile remote backup-urile vechi rămân
+// unde sunt (calea e salvată per backup); cele noi merg în folderul cu numele nou.
+router.put('/:id/name', (req: Request, res: Response) => {
+  const db = getDb();
+  const conn = db.prepare('SELECT * FROM connections WHERE id = ?').get(req.params.id) as Connection | undefined;
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
+
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  if (!name) return res.status(400).json({ error: 'Numele serverului nu poate fi gol.' });
+  if (name === conn.name) return res.json(publicConnection(conn));
+
+  const running = db.prepare("SELECT 1 FROM backups WHERE connection_id = ? AND status = 'running'").get(conn.id);
+  if (running) {
+    return res.status(409).json({ error: 'Un backup rulează acum pentru acest server. Redenumește după ce se termină.' });
+  }
+
+  const oldDir = getServerDir(conn.name);
+  const newDir = getServerDir(name);
+  if (newDir !== oldDir) {
+    const others = db.prepare('SELECT name FROM connections WHERE id != ?').all(conn.id) as { name: string }[];
+    const clash = others.find(o => getServerDir(o.name) === newDir);
+    if (clash) {
+      return res.status(409).json({ error: `Numele „${name}” ar folosi același folder de backup ca serverul „${clash.name}”. Alege alt nume.` });
+    }
+    if (fs.existsSync(newDir)) {
+      return res.status(409).json({ error: `Folderul backup_servers/${path.basename(newDir)} există deja. Alege alt nume sau mută folderul manual.` });
+    }
+  }
+
+  const moveDir = newDir !== oldDir && fs.existsSync(oldDir);
+  if (moveDir) fs.renameSync(oldDir, newDir);
+  try {
+    db.transaction(() => {
+      db.prepare("UPDATE connections SET name = ?, updated_at = datetime('now') WHERE id = ?").run(name, conn.id);
+      if (moveDir) {
+        const prefix = oldDir + path.sep;
+        db.prepare(`
+          UPDATE backups SET file_path = ? || substr(file_path, ?)
+          WHERE connection_id = ? AND substr(file_path, 1, ?) = ?
+        `).run(newDir, oldDir.length + 1, conn.id, prefix.length, prefix);
+      }
+    })();
+  } catch (err) {
+    if (moveDir) fs.renameSync(newDir, oldDir);
+    throw err;
+  }
+
+  const updated = db.prepare('SELECT * FROM connections WHERE id = ?').get(conn.id) as Connection;
+  res.json(publicConnection(updated));
+});
+
 // Check if connection has backups before delete
 router.get('/:id/backup-count', (req: Request, res: Response) => {
   const db = getDb();
@@ -193,8 +272,9 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
   // 5. Delete the connection (CASCADE would handle backups/schedules but we do it explicitly above)
   db.prepare('DELETE FROM connections WHERE id = ?').run(req.params.id);
-  // 6. Clear the server's own Slack webhook (stored in settings, not covered by CASCADE)
+  // 6. Clear the server's own Slack webhook and mysqldump options (stored in settings, not covered by CASCADE)
   setServerSlackWebhookUrl(req.params.id, '');
+  setDumpOptions(req.params.id, null);
   res.json({ success: true });
 });
 
@@ -210,7 +290,7 @@ router.post('/:id/validate', async (req: Request, res: Response) => {
   const db = getDb();
   const conn = db.prepare('SELECT * FROM connections WHERE id = ?').get(req.params.id) as Connection | undefined;
   if (!conn) return res.status(404).json({ error: 'Connection not found' });
-  const result = await validateMySQLCapabilities(conn);
+  const result = await validateMySQLCapabilities(conn, getDumpOptions(conn.id));
   res.json(result);
 });
 

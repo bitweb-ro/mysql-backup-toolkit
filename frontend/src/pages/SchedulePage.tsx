@@ -2,26 +2,105 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api";
 import { Connection, Schedule } from "../types";
+import {
+  CronFreq, CronParts, HOUR_STEPS, WEEKDAYS,
+  buildCron, parseCron, describeCron, maxIntervalHours, formatHours,
+} from "../cron";
 
-const CRON_PRESETS = [
-  { label: "În fiecare zi la 02:00", value: "0 2 * * *" },
-  { label: "În fiecare zi la 00:00", value: "0 0 * * *" },
-  { label: "Duminică la 01:00", value: "0 1 * * 0" },
-  { label: "Luni–Vineri la 23:00", value: "0 23 * * 1-5" },
-];
+const FREQ_LABELS: Record<CronFreq, string> = {
+  off: "Dezactivat",
+  hours: "La fiecare câteva ore",
+  daily: "Zilnic (la 24 de ore)",
+  weekdays: "Luni–vineri",
+  weekly: "Săptămânal",
+  monthly: "Lunar",
+  custom: "Personalizat (expresie cron)",
+};
 
-const INCR_PRESETS = [
-  { label: "La fiecare 6 ore", value: "0 */6 * * *" },
-  { label: "La fiecare 4 ore", value: "0 */4 * * *" },
-  { label: "La fiecare 2 ore", value: "0 */2 * * *" },
-  { label: "La fiecare oră", value: "0 * * * *" },
-];
+// Frecvență + oră / zi → expresie cron. Starea internă se reinițializează prin `key` (după încărcare / ștergere).
+function CronPicker({ value, onChange, freqs, defaults }: {
+  value: string;
+  onChange: (cron: string) => void;
+  freqs: CronFreq[];
+  defaults: Omit<CronParts, "freq" | "custom">;
+}) {
+  const [parts, setParts] = useState<CronParts>(() => parseCron(value, defaults));
+  const update = (patch: Partial<CronParts>) => {
+    const next = { ...parts, ...patch };
+    if (patch.freq === "custom" && !next.custom) next.custom = buildCron(parts);
+    setParts(next);
+    onChange(buildCron(next));
+  };
+  const options = freqs.includes(parts.freq) ? freqs : [...freqs, parts.freq];
+  const timed = ["daily", "weekdays", "weekly", "monthly"].includes(parts.freq);
 
-function describeCron(expr: string): string {
-  if (!expr) return "";
-  const presets = [...CRON_PRESETS, ...INCR_PRESETS];
-  const found = presets.find((p) => p.value === expr);
-  return found ? found.label : expr;
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div className="form-group" style={{ marginBottom: 0, minWidth: 200 }}>
+          <label className="form-label">Frecvență</label>
+          <select value={parts.freq} onChange={(e) => update({ freq: e.target.value as CronFreq })}>
+            {options.map((f) => <option key={f} value={f}>{FREQ_LABELS[f]}</option>)}
+          </select>
+        </div>
+        {parts.freq === "hours" && (
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Interval</label>
+            <select value={parts.hours} onChange={(e) => update({ hours: Number(e.target.value) })}>
+              {HOUR_STEPS.map((h) => <option key={h} value={h}>{h === 1 ? "la fiecare oră" : `la ${h} ore`}</option>)}
+            </select>
+          </div>
+        )}
+        {parts.freq === "weekly" && (
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Ziua</label>
+            <select value={parts.weekday} onChange={(e) => update({ weekday: Number(e.target.value) })}>
+              {[1, 2, 3, 4, 5, 6, 0].map((d) => <option key={d} value={d}>{WEEKDAYS[d]}</option>)}
+            </select>
+          </div>
+        )}
+        {parts.freq === "monthly" && (
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Ziua din lună</label>
+            <select value={parts.monthDay} onChange={(e) => update({ monthDay: Number(e.target.value) })}>
+              {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+        )}
+        {timed && (
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Ora</label>
+            <input type="time" value={parts.time} onChange={(e) => e.target.value && update({ time: e.target.value })} />
+          </div>
+        )}
+      </div>
+
+      {parts.freq === "custom" && (
+        <div className="form-group" style={{ marginTop: 10, marginBottom: 0 }}>
+          <input
+            value={parts.custom}
+            onChange={(e) => update({ custom: e.target.value })}
+            placeholder="ex: 30 1 * * 6  (sâmbătă la 01:30)"
+            className="mono"
+          />
+          <div className="meta" style={{ marginTop: 4 }}>
+            Format: minute oră zi-lună lună zi-săptămână ·{" "}
+            <a href="https://crontab.guru" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
+              crontab.guru
+            </a>
+          </div>
+        </div>
+      )}
+      {parts.freq === "monthly" && (
+        <div className="meta" style={{ marginTop: 6 }}>Zilele 29–31 nu există în fiecare lună, de aceea lista se oprește la 28.</div>
+      )}
+      {parts.freq !== "off" && parts.freq !== "custom" && (
+        <div className="meta" style={{ marginTop: 6 }}>
+          cron: <span className="mono">{buildCron(parts)}</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function SchedulePage() {
@@ -40,6 +119,7 @@ export default function SchedulePage() {
   const [enabled, setEnabled] = useState(true);
   const [retentionDays, setRetentionDays] = useState(30);
   const [cleanupIncrementals, setCleanupIncrementals] = useState(false);
+  const [pickerKey, setPickerKey] = useState(0); // reinițializează selectoarele după încărcare / ștergere
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -57,6 +137,7 @@ export default function SchedulePage() {
         setRetentionDays(s.retention_days);
         setCleanupIncrementals(s.cleanup_incrementals);
       }
+      setPickerKey((k) => k + 1);
     } catch {
       /* silent */
     } finally {
@@ -100,6 +181,7 @@ export default function SchedulePage() {
       setSchedule(null);
       setFullCron("");
       setIncrCron("");
+      setPickerKey((k) => k + 1);
       setAlert({ type: "success", msg: "Programul a fost șters." });
     } catch (e: unknown) {
       setAlert({
@@ -127,6 +209,31 @@ export default function SchedulePage() {
       </div>
     );
   }
+
+  // Combinații care nu au sens sau care fac restaurarea nesigură
+  const fullHours = maxIntervalHours(fullCron);
+  const incrHours = maxIntervalHours(incrCron);
+  const warnings: string[] = [];
+  if (incrCron && !fullCron) {
+    warnings.push(
+      "Incremental fără full programat: fiecare incremental depinde de ultimul full și de toate incrementalele de după el. " +
+      "Lanțul crește la nesfârșit, iar retenția nu poate șterge nimic din el. Programează și un full (ex: săptămânal sau lunar)."
+    );
+  }
+  if (fullHours && incrHours && incrHours >= fullHours) {
+    warnings.push(
+      `Incrementalul (${describeCron(incrCron)}) nu rulează mai des decât full-ul (${describeCron(fullCron)}), deci nu aduce ` +
+      "puncte de restaurare în plus. Alege un interval mai scurt pentru incremental sau dezactivează-l."
+    );
+  }
+  if (incrHours && incrHours >= 7 * 24) {
+    warnings.push(
+      `Incrementalul rulează la până la ${formatHours(incrHours)}: serverul MySQL trebuie să păstreze binlog-urile cel puțin ` +
+      "atât (binlog_expire_logs_seconds), altfel incrementalul eșuează. Verifică cu „Testează drepturile și configurațiile”."
+    );
+  }
+  // Retenția păstrează și full-ul de bază (cu incrementalele lui) de care depind backup-urile din ultimele N zile
+  const maxKeptDays = fullHours ? retentionDays + Math.ceil(fullHours / 24) : null;
 
   return (
     <>
@@ -183,40 +290,13 @@ export default function SchedulePage() {
             <span className="card-title">Full Backup</span>
             {fullCron && <span className="meta">{describeCron(fullCron)}</span>}
           </div>
-          <div className="form-group" style={{ marginBottom: 10 }}>
-            <label className="form-label">Expresie cron</label>
-            <input
-              value={fullCron}
-              onChange={(e) => setFullCron(e.target.value)}
-              placeholder="ex: 0 2 * * *  (în fiecare zi la 02:00)"
-              className="mono"
-            />
-            <div className="meta" style={{ marginTop: 4 }}>
-              Format: minute oră zi-lună lună zi-săptămână ·{" "}
-              <a
-                href="https://crontab.guru"
-                target="_blank"
-                rel="noreferrer"
-                style={{ color: "var(--accent)" }}
-              >
-                crontab.guru
-              </a>
-            </div>
-          </div>
-          <div className="cron-presets">
-            {CRON_PRESETS.map((p) => (
-              <button
-                key={p.value}
-                className={`preset-btn ${fullCron === p.value ? "active" : ""}`}
-                onClick={() => setFullCron(p.value)}
-              >
-                {p.label}
-              </button>
-            ))}
-            <button className="preset-btn" onClick={() => setFullCron("")}>
-              Dezactivat
-            </button>
-          </div>
+          <CronPicker
+            key={`full-${pickerKey}`}
+            value={fullCron}
+            onChange={setFullCron}
+            freqs={["off", "daily", "weekdays", "weekly", "monthly", "custom"]}
+            defaults={{ hours: 24, time: "02:00", weekday: 0, monthDay: 1 }}
+          />
         </div>
 
         {/* Incremental schedule */}
@@ -225,30 +305,20 @@ export default function SchedulePage() {
             <span className="card-title">Backup Incremental</span>
             {incrCron && <span className="meta">{describeCron(incrCron)}</span>}
           </div>
-          <div className="form-group" style={{ marginBottom: 10 }}>
-            <label className="form-label">Expresie cron</label>
-            <input
-              value={incrCron}
-              onChange={(e) => setIncrCron(e.target.value)}
-              placeholder="ex: 0 */6 * * *  (la fiecare 6 ore)"
-              className="mono"
-            />
-          </div>
-          <div className="cron-presets">
-            {INCR_PRESETS.map((p) => (
-              <button
-                key={p.value}
-                className={`preset-btn ${incrCron === p.value ? "active" : ""}`}
-                onClick={() => setIncrCron(p.value)}
-              >
-                {p.label}
-              </button>
-            ))}
-            <button className="preset-btn" onClick={() => setIncrCron("")}>
-              Dezactivat
-            </button>
-          </div>
+          <CronPicker
+            key={`incr-${pickerKey}`}
+            value={incrCron}
+            onChange={setIncrCron}
+            freqs={["off", "hours", "daily", "weekly", "monthly", "custom"]}
+            defaults={{ hours: 6, time: "14:00", weekday: 3, monthDay: 15 }}
+          />
         </div>
+
+        {warnings.length > 0 && (
+          <div className="alert error" style={{ marginBottom: 16, flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
+            {warnings.map((w) => <div key={w}>⚠ {w}</div>)}
+          </div>
+        )}
 
         {/* Retention & Cleanup */}
         <div className="card" style={{ marginBottom: 16 }}>
@@ -264,7 +334,7 @@ export default function SchedulePage() {
               <input
                 type="number"
                 min={1}
-                max={365}
+                max={3650}
                 value={retentionDays}
                 onChange={(e) =>
                   setRetentionDays(parseInt(e.target.value) || 30)
@@ -272,9 +342,17 @@ export default function SchedulePage() {
                 style={{ width: 100 }}
               />
               <span className="meta">
-                Backup-urile mai vechi de {retentionDays} zile vor fi șterse
-                automat după fiecare backup full.
+                Orice moment din ultimele {retentionDays} zile rămâne restaurabil.
               </span>
+            </div>
+            <div className="meta" style={{ marginTop: 8, lineHeight: 1.6 }}>
+              Curățarea rulează după fiecare backup reușit și șterge pe lanțuri: un incremental se restaurează doar peste
+              full-ul de dinaintea lui și peste toate incrementalele dintre ele. De aceea se păstrează și full-ul de bază
+              (cel mai nou full mai vechi de {retentionDays} zile) împreună cu incrementalele lui, iar cel mai nou full nu
+              se șterge niciodată, nici dacă full-urile eșuează o perioadă.
+              {maxKeptDays && maxKeptDays > retentionDays && (
+                <> Cu full {describeCron(fullCron)}, pe disc pot rămâne backup-uri de până la ~{maxKeptDays} zile.</>
+              )}
             </div>
           </div>
 
@@ -289,13 +367,12 @@ export default function SchedulePage() {
             />
             <div>
               <div style={{ fontWeight: 500, fontSize: 13 }}>
-                Șterge incrementalele din ziua precedentă după backup full
+                Păstrează doar incrementalele de după ultimul full
               </div>
               <div className="meta" style={{ marginTop: 2 }}>
-                Dacă există un backup full pentru ziua X, toate incrementalele
-                din ziua X vor fi șterse automat după backup-ul full următor.
-                Economisești spațiu păstrând doar full-ul + incrementalele din
-                ziua curentă.
+                După fiecare full reușit, incrementalele dinaintea lui se șterg (datele lor sunt deja în full).
+                Economisești spațiu, dar momentele dintre full-urile mai vechi nu se mai pot restaura exact, doar
+                full-urile. Incrementalele de după ultimul full, necesare pentru starea actuală, nu se șterg.
               </div>
             </div>
           </label>
@@ -343,7 +420,7 @@ export default function SchedulePage() {
               </div>
               <div>
                 <span style={{ color: "var(--amber)" }}>
-                  Curățare incrementale vechi:
+                  Doar incrementalele de după ultimul full:
                 </span>{" "}
                 {cleanupIncrementals ? "Da" : "Nu"}
               </div>

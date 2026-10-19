@@ -105,9 +105,10 @@ async function runScheduledBackup(connectionId: string, type: 'full' | 'incremen
       `).run(result.filePath ?? null, result.fileSize ?? null, result.binlogFile ?? null, result.binlogPos ?? null, logStr,
         result.storageType ?? null, result.remotePath ?? null, result.storageError ?? null, backupId);
 
+      // După orice backup reușit: retenția e pe lanțuri, deci nu poate șterge ce e necesar restaurării
       const schedule = db.prepare('SELECT * FROM schedules WHERE connection_id = ?').get(connectionId) as Schedule | undefined;
-      if (schedule && type === 'full') {
-        await cleanupBackups(connectionId, conn.name, schedule.retention_days, !!schedule.cleanup_incrementals);
+      if (schedule) {
+        await cleanupBackups(connectionId, conn.name, schedule.retention_days, !!schedule.cleanup_incrementals, backupId);
       }
     } else {
       db.prepare("UPDATE backups SET status='failed', error_message=?, logs=?, completed_at=datetime('now') WHERE id=?")

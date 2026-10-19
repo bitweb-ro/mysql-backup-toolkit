@@ -16,6 +16,11 @@ export default function RestorePage() {
   const [confirming, setConfirming] = useState<string | null>(null);
   const [runningJobId, setRunningJobId] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
+  // Destinația: baza originală sau o altă bază pe același server (restaurare de verificare)
+  const [toOtherDb, setToOtherDb] = useState(false);
+  const [targetDb, setTargetDb] = useState('');
+  const [overwrite, setOverwrite] = useState(false);
+  const [restoringTo, setRestoringTo] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -23,6 +28,7 @@ export default function RestorePage() {
       const [c, b] = await Promise.all([api.getConnection(id), api.getBackups(id)]);
       setConn(c);
       setData(b);
+      setTargetDb(prev => prev || `${c.database_name}_verificare`.slice(0, 64));
     } catch { /* silent */ }
     finally { setLoading(false); }
   }, [id]);
@@ -40,7 +46,13 @@ export default function RestorePage() {
           setRunningJobId(null);
           clearInterval(interval);
           if (job.status === 'success') {
-            setAlert({ type: 'success', msg: 'Restaurare completă! Baza de date a fost restaurată cu succes.' });
+            setAlert({
+              type: 'success',
+              msg: restoringTo
+                ? `Restaurare completă în baza „${restoringTo}”. Baza originală nu a fost modificată. ` +
+                  `După verificare, o poți șterge (ca root/admin): DROP DATABASE \`${restoringTo}\`;`
+                : 'Restaurare completă! Baza de date a fost restaurată cu succes.',
+            });
           } else {
             setAlert({ type: 'error', msg: `Restaurare eșuată: ${job.error}` });
           }
@@ -48,19 +60,26 @@ export default function RestorePage() {
       } catch { setRunningJobId(null); }
     }, 1500);
     return () => clearInterval(interval);
-  }, [runningJobId, id]);
+  }, [runningJobId, id, restoringTo]);
+
+  const otherTarget = toOtherDb ? targetDb.trim() : '';
+  const targetError = !toOtherDb ? null
+    : !/^[A-Za-z0-9_]{1,64}$/.test(otherTarget) ? 'Doar litere, cifre și _ (maxim 64 de caractere).'
+    : otherTarget === conn?.database_name ? 'Numele trebuie să fie diferit de baza originală.'
+    : null;
 
   const handleRestore = async (backup: Backup) => {
     if (!id) return;
     if (confirming !== backup.id) { setConfirming(backup.id); return; }
     setConfirming(null);
     setLogLines([]);
-    setAlert({ type: 'info', msg: 'Restaurare pornită...' });
+    setAlert({ type: 'info', msg: otherTarget ? `Restaurare pornită în baza „${otherTarget}”...` : 'Restaurare pornită...' });
 
     try {
       const r = backup.type === 'full'
-        ? await api.restoreFullBackup(id, backup.id)
+        ? await api.restoreFullBackup(id, backup.id, otherTarget ? { targetDatabase: otherTarget, overwrite } : undefined)
         : await api.restoreIncrementalBackup(id, backup.id);
+      setRestoringTo(otherTarget || null);
       setRunningJobId(r.jobId);
     } catch (e: unknown) {
       setAlert({ type: 'error', msg: e instanceof Error ? e.message : 'Eroare la pornire restore' });
@@ -77,6 +96,8 @@ export default function RestorePage() {
 
   const isRunning = !!runningJobId;
   const successBackups = (data?.backups || []).filter(b => b.status === 'success' && b.type === activeTab);
+  // Incrementalele nu se pot redirecționa: binlog-ul conține numele bazei originale
+  const restoreBlocked = toOtherDb && (activeTab === 'incremental' || !!targetError);
 
   return (
     <>
@@ -89,12 +110,22 @@ export default function RestorePage() {
       </div>
 
       <div className="page-content">
-        <div className="alert error" style={{ marginBottom: 20 }}>
-          <span style={{ fontSize: 16 }}>⚠</span>
-          <span>
-            <strong>Atenție:</strong> Restaurarea suprascrie datele din <strong>{conn.database_name}</strong>. Acțiunea este ireversibilă.
-          </span>
-        </div>
+        {toOtherDb ? (
+          <div className="alert info" style={{ marginBottom: 20 }}>
+            <span style={{ fontSize: 16 }}>🔍</span>
+            <span>
+              <strong>Restaurare de verificare:</strong> backup-ul se restaurează în <strong>{otherTarget || '…'}</strong>, pe același
+              server. Baza originală <strong>{conn.database_name}</strong> nu se modifică.
+            </span>
+          </div>
+        ) : (
+          <div className="alert error" style={{ marginBottom: 20 }}>
+            <span style={{ fontSize: 16 }}>⚠</span>
+            <span>
+              <strong>Atenție:</strong> Restaurarea suprascrie datele din <strong>{conn.database_name}</strong>. Acțiunea este ireversibilă.
+            </span>
+          </div>
+        )}
 
         {alert && (
           <div className={`alert ${alert.type}`} style={{ marginBottom: 16 }}>
@@ -125,6 +156,57 @@ export default function RestorePage() {
           </ol>
         </div>
 
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="card-header" style={{ marginBottom: 8 }}>
+            <span className="card-title">Destinație</span>
+          </div>
+          <label className="schedule-toggle" style={{ marginBottom: 6 }}>
+            <input type="radio" name="restore-target" checked={!toOtherDb} disabled={isRunning}
+              onChange={() => { setToOtherDb(false); setConfirming(null); }} />
+            <span style={{ fontSize: 13 }}>
+              Baza originală <strong>{conn.database_name}</strong>
+              <div className="meta" style={{ marginTop: 2 }}>Suprascrie datele actuale: pentru recuperare după o problemă.</div>
+            </span>
+          </label>
+          <label className="schedule-toggle" style={{ marginBottom: toOtherDb ? 12 : 0 }}>
+            <input type="radio" name="restore-target" checked={toOtherDb} disabled={isRunning}
+              onChange={() => { setToOtherDb(true); setConfirming(null); }} />
+            <span style={{ fontSize: 13 }}>
+              Altă bază de date, pe același server (verificare)
+              <div className="meta" style={{ marginTop: 2 }}>
+                Pentru a verifica un backup sau a vedea ce date erau la acel moment, fără să atingi baza originală.
+              </div>
+            </span>
+          </label>
+          {toOtherDb && (
+            <div style={{ paddingLeft: 26 }}>
+              <input
+                type="text"
+                className={targetError ? 'input-error' : undefined}
+                value={targetDb}
+                disabled={isRunning}
+                onChange={e => { setTargetDb(e.target.value); setConfirming(null); }}
+              />
+              {targetError && <div className="meta" style={{ color: 'var(--red)', marginTop: 4 }}>{targetError}</div>}
+              <label className="schedule-toggle" style={{ marginTop: 10 }}>
+                <input type="checkbox" checked={overwrite} disabled={isRunning} onChange={e => setOverwrite(e.target.checked)} />
+                <span style={{ fontSize: 13 }}>
+                  Suprascrie baza existentă
+                  <div className="meta" style={{ marginTop: 2 }}>
+                    Implicit, restaurarea e refuzată dacă baza există și are tabele (ca să nu suprascrii din greșeală altă bază).
+                  </div>
+                </span>
+              </label>
+              <div className="meta" style={{ marginTop: 10, lineHeight: 1.6 }}>
+                Baza se creează automat dacă nu există. User-ul conexiunii are nevoie de drepturi pe ea
+                (ca root/admin: <code>GRANT ALL PRIVILEGES ON `{otherTarget || 'nume'}`.* TO '{conn.user}'@'%';</code>).
+                Restaurarea ocupă spațiu și încarcă serverul cât durează. Doar backup-urile <strong>full</strong> se pot
+                restaura în altă bază.
+              </div>
+            </div>
+          )}
+        </div>
+
         <div className="tabs">
           <button className={`tab ${activeTab === 'full' ? 'active' : ''}`} onClick={() => { setActiveTab('full'); setConfirming(null); }}>
             Full ({(data?.backups || []).filter(b => b.type === 'full' && b.status === 'success').length})
@@ -133,6 +215,13 @@ export default function RestorePage() {
             Incrementale ({(data?.backups || []).filter(b => b.type === 'incremental' && b.status === 'success').length})
           </button>
         </div>
+
+        {toOtherDb && activeTab === 'incremental' && (
+          <div className="alert info" style={{ marginBottom: 16 }}>
+            Backup-urile incrementale nu se pot restaura în altă bază: modificările din binlog conțin numele bazei
+            originale ({conn.database_name}) și ar fi aplicate tot acolo. Pentru verificare, folosește un backup full.
+          </div>
+        )}
 
         {successBackups.length === 0 ? (
           <div className="empty">
@@ -160,6 +249,7 @@ export default function RestorePage() {
                       isFirst={i === 0}
                       confirming={confirming === b.id}
                       restoring={isRunning}
+                      blocked={restoreBlocked}
                       onRestore={() => handleRestore(b)}
                       onCancel={() => setConfirming(null)}
                     />
@@ -174,9 +264,9 @@ export default function RestorePage() {
   );
 }
 
-function RestoreRow({ backup: b, index, isFirst, confirming, restoring, onRestore, onCancel }: {
+function RestoreRow({ backup: b, index, isFirst, confirming, restoring, blocked, onRestore, onCancel }: {
   backup: Backup; index: number; isFirst: boolean;
-  confirming: boolean; restoring: boolean;
+  confirming: boolean; restoring: boolean; blocked: boolean;
   onRestore: () => void; onCancel: () => void;
 }) {
   return (
@@ -207,7 +297,7 @@ function RestoreRow({ backup: b, index, isFirst, confirming, restoring, onRestor
             <button className="btn btn-ghost btn-sm" onClick={onCancel}>Nu</button>
           </div>
         ) : (
-          <button className="btn btn-secondary btn-sm" onClick={onRestore} disabled={restoring}>
+          <button className="btn btn-secondary btn-sm" onClick={onRestore} disabled={restoring || blocked}>
             ↩ Restaurează
           </button>
         )}

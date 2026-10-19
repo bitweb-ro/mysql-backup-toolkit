@@ -49,6 +49,11 @@ export const api = {
     req<import('./types').Connection>('/connections', { method: 'POST', body: JSON.stringify(data) }).then(connectionsChanged),
   updateConnection: (id: string, data: Partial<import('./types').Connection>) =>
     req<import('./types').Connection>(`/connections/${id}`, { method: 'PUT', body: JSON.stringify(data) }).then(connectionsChanged),
+  renameConnection: (id: string, name: string) =>
+    req<import('./types').Connection>(`/connections/${id}/name`, { method: 'PUT', body: JSON.stringify({ name }) }).then(connectionsChanged),
+  getDumpOptions: (id: string) => req<import('./types').DumpOptions>(`/connections/${id}/dump-options`),
+  saveDumpOptions: (id: string, data: Partial<import('./types').DumpOptions>) =>
+    req<import('./types').DumpOptions>(`/connections/${id}/dump-options`, { method: 'PUT', body: JSON.stringify(data) }),
   getConnectionBackupCount: (id: string) =>
     req<{ count: number }>(`/connections/${id}/backup-count`),
   deleteConnection: (id: string, confirmPassword?: string) =>
@@ -101,8 +106,12 @@ export const api = {
     req<{ backupId: string; status: string }>(`/connections/${connectionId}/backups/full`, { method: 'POST' }),
   runIncrementalBackup: (connectionId: string) =>
     req<{ backupId: string; status: string }>(`/connections/${connectionId}/backups/incremental`, { method: 'POST' }),
-  restoreFullBackup: (connectionId: string, backupId: string) =>
-    req<{ jobId: string; status: string }>(`/connections/${connectionId}/backups/${backupId}/restore/full`, { method: 'POST' }),
+  // target: restaurare de verificare într-o altă bază; overwrite = permite o bază existentă cu tabele
+  restoreFullBackup: (connectionId: string, backupId: string, target?: { targetDatabase: string; overwrite: boolean }) =>
+    req<{ jobId: string; status: string }>(`/connections/${connectionId}/backups/${backupId}/restore/full`, {
+      method: 'POST',
+      body: JSON.stringify(target || {}),
+    }),
   restoreIncrementalBackup: (connectionId: string, backupId: string) =>
     req<{ jobId: string; status: string }>(`/connections/${connectionId}/backups/${backupId}/restore/incremental`, { method: 'POST' }),
   getRestoreJob: (connectionId: string, jobId: string) =>

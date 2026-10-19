@@ -8,6 +8,7 @@ import ServerSettingsPage from './pages/ServerSettingsPage';
 import BackupPage from './pages/BackupPage';
 import RestorePage from './pages/RestorePage';
 import SchedulePage from './pages/SchedulePage';
+import LogsPage from './pages/LogsPage';
 import LoginPage from './pages/LoginPage';
 
 function Layout({ onLogout }: { onLogout: () => void }) {
@@ -23,6 +24,7 @@ function Layout({ onLogout }: { onLogout: () => void }) {
             <Route path="backup" element={<BackupPage />} />
             <Route path="restore" element={<RestorePage />} />
             <Route path="schedule" element={<SchedulePage />} />
+            <Route path="logs" element={<LogsPage />} />
             <Route path="settings" element={<ServerSettingsPage />} />
           </Route>
         </Routes>
