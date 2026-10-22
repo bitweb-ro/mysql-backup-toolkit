@@ -49,13 +49,29 @@ router.get('/', (_req: Request, res: Response) => {
       SELECT MAX(completed_at) as at FROM backups WHERE connection_id = ? AND status = 'success'
     `).get(conn.id) as { at: string | null };
 
+    // Ultimele 2 erori din ultimele 7 zile: backup eșuat sau upload eșuat pe destinația remote.
+    // „resolved” = după eroare a urmat un backup reușit de același tip, cu upload reușit.
+    const recentErrors = db.prepare(`
+      SELECT b.id, b.type, b.status, b.error_message, b.storage_error, b.started_at,
+        EXISTS (
+          SELECT 1 FROM backups s
+          WHERE s.connection_id = b.connection_id AND s.type = b.type AND s.status = 'success'
+            AND s.storage_error IS NULL AND s.started_at > b.started_at
+        ) AS resolved
+      FROM backups b
+      WHERE b.connection_id = ? AND (b.status = 'failed' OR b.storage_error IS NOT NULL)
+        AND b.started_at >= datetime('now', '-7 days')
+      ORDER BY b.started_at DESC LIMIT 2
+    `).all(conn.id) as (Pick<Backup, 'id' | 'type' | 'status' | 'error_message' | 'storage_error' | 'started_at'> & { resolved: number })[];
+
     return {
       connection: publicConnection(conn),
       lastFull: lastFull || null,
       todayIncrementals,
       runningBackup: runningBackup || null,
       totalBackups: totalBackups.count,
-      lastBackupAt: lastBackup.at
+      lastBackupAt: lastBackup.at,
+      recentErrors: recentErrors.map(e => ({ ...e, resolved: e.resolved === 1 }))
     };
   });
 

@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { getDb } from '../db/database';
 import {
-  testConnection, validateMySQLCapabilities, getServerDir, getDumpOptions, setDumpOptions,
+  testConnection, validateMySQLCapabilities, getServerDir, getDumpOptions, setDumpOptions, TABLE_NAME_PATTERN,
 } from '../services/backupService';
 import {
   getServerStorageConfig, getDefaultStorageConfig, maskStorageConfig, describeStorage,
@@ -95,7 +95,8 @@ router.get('/:id/dump-options', (req: Request, res: Response) => {
   res.json(getDumpOptions(req.params.id));
 });
 
-// Body parțial: { gtidPurgedOff?: boolean, maxAllowedPacket?: boolean }; câmpurile lipsă rămân neschimbate.
+// Body parțial: { gtidPurgedOff?: boolean, maxAllowedPacket?: boolean, ignoreTables?: string[] };
+// câmpurile lipsă rămân neschimbate.
 router.put('/:id/dump-options', (req: Request, res: Response) => {
   const db = getDb();
   const conn = db.prepare('SELECT id FROM connections WHERE id = ?').get(req.params.id);
@@ -106,6 +107,17 @@ router.put('/:id/dump-options', (req: Request, res: Response) => {
     if (body[key] === undefined) continue;
     if (typeof body[key] !== 'boolean') return res.status(400).json({ error: `${key} trebuie să fie true sau false.` });
     current[key] = body[key];
+  }
+  if (body.ignoreTables !== undefined) {
+    const tables: unknown = body.ignoreTables;
+    if (!Array.isArray(tables) || tables.length > 50) {
+      return res.status(400).json({ error: 'ignoreTables trebuie să fie o listă de cel mult 50 de tabele.' });
+    }
+    const invalid = tables.filter(t => typeof t !== 'string' || !TABLE_NAME_PATTERN.test(t));
+    if (invalid.length > 0) {
+      return res.status(400).json({ error: `Nume de tabel invalid: ${invalid.map(String).join(', ')} (doar litere, cifre, _ și $).` });
+    }
+    current.ignoreTables = [...new Set(tables as string[])];
   }
   setDumpOptions(req.params.id, current);
   res.json(current);

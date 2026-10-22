@@ -18,7 +18,12 @@ const RULES: { test: RegExp; diagnose: (m: RegExpMatchArray) => Diagnosis }[] = 
       detail:
         "Conexiunea s-a pierdut pentru că serverul MySQL s-a oprit (crash, lipsă memorie, restart). " +
         "Dacă se întâmplă mereu la același rând, citirea acelui rând oprește serverul (posibil tabel corupt).",
-      fix: "Verifică jurnalul de erori MySQL pe server (ex: /var/log/mysql/error.log) și rulează CHECK TABLE pe tabelul indicat.",
+      fix:
+        "1) Verifică jurnalul de erori MySQL pe server la ora erorii (ex: /var/log/mysql/error.log; ora din jurnalul aplicației e UTC): " +
+        "„Database page corruption” / „Assertion failure” = tabel corupt; în dmesg „Out of memory” = lipsă memorie. " +
+        "2) Până la reparare, exclude tabelul din backup: tab-ul Setări → „Exclude tabele”, ca restul bazei să aibă backup. " +
+        "3) Nu rula CHECK TABLE / ALTER TABLE pe tabel în producție fără o fereastră de mentenanță: când InnoDB găsește " +
+        "o pagină coruptă, oprește serverul.",
     }),
   },
   {
@@ -26,7 +31,9 @@ const RULES: { test: RegExp; diagnose: (m: RegExpMatchArray) => Diagnosis }[] = 
     diagnose: () => ({
       title: "Rândul nu poate fi citit pe server (posibil tabel corupt)",
       detail: "Și o citire separată a rândului la care s-a oprit backup-ul eșuează, deci problema e pe serverul MySQL, nu în backup.",
-      fix: "Verifică jurnalul de erori MySQL și rulează CHECK TABLE pe tabelul indicat.",
+      fix:
+        "Verifică jurnalul de erori MySQL la ora erorii. Până la reparare, exclude tabelul din backup (tab-ul Setări → " +
+        "„Exclude tabele”). CHECK TABLE / ALTER TABLE pe un tabel corupt pot opri serverul: rulează-le doar într-o fereastră de mentenanță.",
     }),
   },
   {

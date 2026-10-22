@@ -74,6 +74,15 @@ function parsePort(v: unknown, def: number): number | null {
   return Number.isInteger(n) && n > 0 && n < 65536 ? n : null;
 }
 
+// Gol, „/” sau „.”: backup-urile ar ajunge direct în rădăcină (pe Synology/NAS nu se poate scrie acolo).
+function isRootDir(dir: string): boolean {
+  return /^[\s/.]*$/.test(dir);
+}
+
+const ROOT_DIR_ERROR =
+  'completează „Director remote” cu un folder, nu „/”. Pe Synology/NAS: un shared folder existent ' +
+  '(ex: /backup-databases-mysql); subfolderele se creează automat.';
+
 // SECRET_MASK = păstrează secretul salvat anterior.
 function secret(incoming: unknown, previous: string | undefined): string {
   if (incoming === SECRET_MASK) return previous ?? '';
@@ -121,6 +130,7 @@ export function parseStorageConfigInput(
       username: str(f.username),
       password: secret(f.password, existing?.ftp?.password),
       secure: f.secure === true,
+      allowSelfSigned: f.secure === true && f.allowSelfSigned === true,
       remoteDir: str(f.remoteDir),
     };
   }
@@ -142,10 +152,12 @@ export function parseStorageConfigInput(
     const s = cfg.sftp;
     if (!s || !s.host || !s.username) return { error: 'SFTP: completează host și utilizator.' };
     if (!s.password && !s.privateKey.trim()) return { error: 'SFTP: completează parola sau cheia privată.' };
+    if (isRootDir(s.remoteDir)) return { error: `SFTP: ${ROOT_DIR_ERROR}` };
   }
   if (type === 'ftp') {
     const f = cfg.ftp;
     if (!f || !f.host || !f.username) return { error: 'FTP: completează host și utilizator.' };
+    if (isRootDir(f.remoteDir)) return { error: `FTP: ${ROOT_DIR_ERROR}` };
   }
   if (type === 's3') {
     const s = cfg.s3;
@@ -215,7 +227,13 @@ async function withSftp<T>(c: SftpStorage, fn: (d: RemoteDriver) => Promise<T>):
     return await fn({
       upload: async (local, remote) => {
         const dir = path.posix.dirname(remote);
-        if (!(await client.exists(dir))) await client.mkdir(dir, true);
+        if (!(await client.exists(dir))) {
+          try {
+            await client.mkdir(dir, true);
+          } catch (err) {
+            throw mkdirError(dir, err, await sftpRootDirs(client));
+          }
+        }
         await client.put(local, remote);
       },
       download: async (remote, local) => { await client.get(remote, local); },
@@ -226,16 +244,54 @@ async function withSftp<T>(c: SftpStorage, fn: (d: RemoteDriver) => Promise<T>):
   }
 }
 
+// Eroare pentru un folder remote care nu a putut fi creat. Pe Synology/NAS, în „/” sunt doar
+// shared folder-ele, care nu se pot crea prin SFTP/FTP. rootDirs = folderele vizibile în „/”.
+function mkdirError(dir: string, err: unknown, rootDirs: string[] | null): Error {
+  return new Error(
+    `Folderul ${dir} nu există și nu a putut fi creat (${err instanceof Error ? err.message : String(err)}). ` +
+    'Verifică dreptul de scriere al userului. Pe Synology/NAS, primul nivel din cale trebuie să fie ' +
+    'un shared folder existent; subfolderele se creează automat. ' +
+    (rootDirs?.length
+      ? `Foldere disponibile în „/” pentru acest user: ${rootDirs.join(', ')}.`
+      : 'Niciun folder vizibil în „/” pentru acest user: verifică permisiunile pe shared folder.')
+  );
+}
+
+// Folderele din rădăcina SFTP / FTP, pentru mkdirError; null dacă nu se pot lista.
+async function sftpRootDirs(client: SftpClient): Promise<string[] | null> {
+  try {
+    return (await client.list('/')).filter(f => f.type === 'd').map(f => `/${f.name}`);
+  } catch {
+    return null;
+  }
+}
+
+async function ftpRootDirs(client: ftp.Client): Promise<string[] | null> {
+  try {
+    return (await client.list('/')).filter(f => f.isDirectory).map(f => `/${f.name}`);
+  } catch {
+    return null;
+  }
+}
+
 async function withFtp<T>(c: FtpStorage, fn: (d: RemoteDriver) => Promise<T>): Promise<T> {
   const client = new ftp.Client(30000);
   try {
-    await client.access({ host: c.host, port: c.port, user: c.username, password: c.password, secure: c.secure });
+    await client.access({
+      host: c.host, port: c.port, user: c.username, password: c.password, secure: c.secure,
+      secureOptions: c.secure && c.allowSelfSigned ? { rejectUnauthorized: false } : undefined,
+    });
     // ensureDir schimbă directorul curent, deci căile relative se rezolvă față de directorul de login.
     const home = await client.pwd();
     const abs = (p: string) => (p.startsWith('/') ? p : path.posix.join(home, p));
     return await fn({
       upload: async (local, remote) => {
-        await client.ensureDir(path.posix.dirname(abs(remote)));
+        const dir = path.posix.dirname(abs(remote));
+        try {
+          await client.ensureDir(dir);
+        } catch (err) {
+          throw mkdirError(dir, err, await ftpRootDirs(client));
+        }
         await client.uploadFrom(local, abs(remote));
       },
       download: async (remote, local) => { await client.downloadTo(local, abs(remote)); },
@@ -283,9 +339,20 @@ const STORAGE_HINTS: [RegExp, string][] = [
     '„Subsystem sftp internal-sftp” (sau instalează pachetul openssh-sftp-server); dacă user-ul are un bloc „Match User”, ' +
     'acolo trebuie „ForceCommand internal-sftp” sau niciun ForceCommand. Apoi: sudo sshd -t && sudo systemctl reload ssh.'],
   [/All configured authentication methods failed/i,
-    'User, parolă sau cheie greșite, ori serverul SSH nu permite metoda folosită (ex: PasswordAuthentication no).'],
+    'User, parolă sau cheie greșite, ori serverul SSH nu permite metoda folosită (ex: PasswordAuthentication no). ' +
+    'Dacă parola apare ca „••••••••”, se folosește parola salvată anterior: dacă ai schimbat-o pe server, rescrie-o.'],
+  [/^530 /,
+    'User sau parolă greșite. Dacă parola apare ca „••••••••”, se folosește parola salvată anterior: ' +
+    'dacă ai schimbat-o pe server, rescrie-o.'],
   [/ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|Timed out while waiting for handshake/i,
     'Serverul nu răspunde pe acest port: verifică host-ul, portul și firewall-ul pentru IP-ul aplicației.'],
+  [/unable to verify the first certificate|self[- ]signed certificate|unable to get local issuer certificate/i,
+    'Certificatul TLS al serverului FTPS nu este de încredere (ex: certificatul implicit Synology). ' +
+    'Bifează „Acceptă certificat self-signed” sau instalează pe server un certificat valid.'],
+  [/^553 .*Permission denied/i,
+    'Userul nu are drept de scriere în acest folder. Pe Synology/NAS, la „Director remote” pune un shared folder (ex: /backup-databases-mysql), nu „/”.'],
+  [/TLS\/SSL protection required/i,
+    'Serverul cere conexiune criptată: bifează „FTPS (TLS explicit)”.'],
 ];
 
 function errMessage(err: unknown): string {

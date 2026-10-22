@@ -30,6 +30,8 @@ export interface FtpStorage {
   username: string;
   password: string;
   secure: boolean;
+  // FTPS: acceptă certificat self-signed / neverificabil (ex: certificatul implicit Synology)
+  allowSelfSigned?: boolean;
   remoteDir: string;
 }
 

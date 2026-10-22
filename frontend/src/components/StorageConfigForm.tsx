@@ -8,7 +8,7 @@ const EMPTY_SFTP: NonNullable<StorageConfig['sftp']> = {
   host: '', port: 22, username: '', password: '', privateKey: '', passphrase: '', remoteDir: '/backups',
 };
 const EMPTY_FTP: NonNullable<StorageConfig['ftp']> = {
-  host: '', port: 21, username: '', password: '', secure: false, remoteDir: '/backups',
+  host: '', port: 21, username: '', password: '', secure: false, allowSelfSigned: false, remoteDir: '/backups',
 };
 const EMPTY_S3: NonNullable<StorageConfig['s3']> = {
   endpoint: '', region: '', bucket: '', accessKeyId: '', secretAccessKey: '', prefix: 'mysql-backups', forcePathStyle: false,
@@ -34,6 +34,13 @@ export function storageTypeLabel(type: StorageType | null | undefined): string {
   }
 }
 
+// Gol, „/” sau „.”: backup-urile ar ajunge direct în rădăcină (pe Synology/NAS nu se poate scrie acolo).
+function isRootDir(dir: string | undefined): boolean {
+  return /^[\s/.]*$/.test(dir ?? '');
+}
+
+const ROOT_DIR_HINT = 'Pune un folder, nu „/”. Pe Synology/NAS: un shared folder existent (ex: /backup-databases-mysql); subfolderele se creează automat.';
+
 // Câmpurile obligatorii necompletate pentru tipul activ (aceleași reguli ca validarea din backend).
 export function missingStorageFields(c: StorageConfig): string[] {
   const out: string[] = [];
@@ -41,10 +48,12 @@ export function missingStorageFields(c: StorageConfig): string[] {
     if (!c.sftp?.host.trim()) out.push('sftp.host');
     if (!c.sftp?.username.trim()) out.push('sftp.username');
     if (!c.sftp?.password && !c.sftp?.privateKey.trim()) out.push('sftp.password', 'sftp.privateKey');
+    if (isRootDir(c.sftp?.remoteDir)) out.push('sftp.remoteDir');
   }
   if (c.type === 'ftp') {
     if (!c.ftp?.host.trim()) out.push('ftp.host');
     if (!c.ftp?.username.trim()) out.push('ftp.username');
+    if (isRootDir(c.ftp?.remoteDir)) out.push('ftp.remoteDir');
   }
   if (c.type === 's3') {
     if (!c.s3?.bucket.trim()) out.push('s3.bucket');
@@ -138,8 +147,9 @@ export default function StorageConfigForm({ value, onChange, showRequired = fals
               <SecretInput value={sftp.passphrase} onChange={v => setSftp({ passphrase: v })} />
             </div>
             <div className="form-group">
-              <label className="form-label">Director remote</label>
-              <input value={sftp.remoteDir} placeholder="/backups" onChange={e => setSftp({ remoteDir: e.target.value })} />
+              <label className="form-label">Director remote *</label>
+              <input className={err('sftp.remoteDir')} value={sftp.remoteDir} placeholder="/backups" onChange={e => setSftp({ remoteDir: e.target.value })} />
+              {isRootDir(sftp.remoteDir) && <div className="meta" style={{ marginTop: 4 }}>{ROOT_DIR_HINT}</div>}
             </div>
           </div>
         </>
@@ -168,13 +178,23 @@ export default function StorageConfigForm({ value, onChange, showRequired = fals
             </div>
           </div>
           <div className="form-group">
-            <label className="form-label">Director remote</label>
-            <input value={ftp.remoteDir} placeholder="/backups" onChange={e => setFtp({ remoteDir: e.target.value })} />
+            <label className="form-label">Director remote *</label>
+            <input className={err('ftp.remoteDir')} value={ftp.remoteDir} placeholder="/backups" onChange={e => setFtp({ remoteDir: e.target.value })} />
+            {isRootDir(ftp.remoteDir) && <div className="meta" style={{ marginTop: 4 }}>{ROOT_DIR_HINT}</div>}
           </div>
           <label className="schedule-toggle" style={{ marginBottom: 14 }}>
             <input type="checkbox" checked={ftp.secure} onChange={e => setFtp({ secure: e.target.checked })} />
             <span style={{ fontSize: 13 }}>FTPS (TLS explicit). Recomandat: FTP simplu trimite parola necriptat.</span>
           </label>
+          {ftp.secure && (
+            <label className="schedule-toggle" style={{ marginBottom: 14 }}>
+              <input type="checkbox" checked={ftp.allowSelfSigned} onChange={e => setFtp({ allowSelfSigned: e.target.checked })} />
+              <span style={{ fontSize: 13 }}>
+                Acceptă certificat self-signed (ex: certificatul implicit Synology). Conexiunea rămâne criptată,
+                dar identitatea serverului nu mai e verificată: folosește doar în rețea internă.
+              </span>
+            </label>
+          )}
         </>
       )}
 

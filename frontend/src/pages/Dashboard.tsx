@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, onConnectionsChanged } from '../api';
-import { DashboardStat, Connection, DiskInfo } from '../types';
+import { DashboardStat, Connection, DiskInfo, RecentError } from '../types';
 import { formatBytes, formatRelative, formatTime } from '../utils';
 import ConnectionModal from '../components/ConnectionModal';
 import ServerOptionsMenu from '../components/ServerOptionsMenu';
@@ -75,6 +75,7 @@ export default function Dashboard() {
 
       <div className="page-content">
         {disk && <DiskPanel disk={disk} />}
+        {stats.length > 0 && <ErrorsPanel stats={stats} />}
         {stats.length === 0 ? (
           <div className="empty">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -133,9 +134,75 @@ function DiskPanel({ disk }: { disk: DiskInfo }) {
   );
 }
 
+const errorText = (e: RecentError) => e.error_message || e.storage_error || 'Eroare necunoscută';
+
+// O eroare pe un rând: tip, mesaj trunchiat (complet la hover), când. Click → jurnalul backup-ului.
+function ErrorRow({ connId, error, serverName }: { connId: string; error: RecentError; serverName?: string }) {
+  const navigate = useNavigate();
+  const isUpload = error.status !== 'failed';
+
+  return (
+    <div
+      onClick={e => { e.stopPropagation(); navigate(`/server/${connId}/logs?backup=${error.id}`); }}
+      title={errorText(error)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 'var(--radius)',
+        background: 'var(--bg3)', cursor: 'pointer', fontSize: 12, opacity: error.resolved ? 0.6 : 1,
+      }}
+    >
+      {serverName && <strong style={{ whiteSpace: 'nowrap' }}>{serverName}</strong>}
+      <span className={`badge ${error.type}`}>{error.type}</span>
+      <span style={{ color: isUpload ? 'var(--amber)' : 'var(--red)', whiteSpace: 'nowrap' }}>
+        {isUpload ? 'upload eșuat' : 'eșuat'}
+      </span>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text2)' }}>
+        {errorText(error)}
+      </span>
+      {error.resolved && <span className="badge success">rezolvat</span>}
+      <span style={{ color: 'var(--text3)', whiteSpace: 'nowrap' }}>{formatRelative(error.started_at)}</span>
+    </div>
+  );
+}
+
+// Toate erorile din ultimele 7 zile, de la toate serverele, cele mai noi primele.
+function ErrorsPanel({ stats }: { stats: DashboardStat[] }) {
+  const all = stats
+    .flatMap(s => s.recentErrors.map(error => ({ conn: s.connection, error })))
+    .sort((a, b) => b.error.started_at.localeCompare(a.error.started_at))
+    .slice(0, 10);
+  const open = all.filter(x => !x.error.resolved).length;
+
+  return (
+    <div className="conn-card" style={{ marginBottom: 20, cursor: 'default', borderColor: open > 0 ? 'var(--red)' : undefined }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+        <div className="conn-name">⚠️ Ultimele erori</div>
+        <div style={{ fontSize: 13, color: 'var(--text2)' }}>
+          {all.length === 0
+            ? <strong style={{ color: 'var(--green)' }}>Nicio eroare în ultimele 7 zile</strong>
+            : open > 0
+              ? <strong style={{ color: 'var(--red)' }}>{open} nerezolvate</strong>
+              : <strong style={{ color: 'var(--green)' }}>Toate rezolvate</strong>}
+        </div>
+      </div>
+      {all.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+          {all.map(({ conn, error }) => (
+            <ErrorRow key={error.id} connId={conn.id} error={error} serverName={conn.name} />
+          ))}
+        </div>
+      )}
+      <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
+        Backup-uri eșuate și upload-uri eșuate, max. 2 per server. „Rezolvat” = a urmat un backup reușit de același tip.
+        Click pe o eroare deschide jurnalul cu cauza.
+      </div>
+    </div>
+  );
+}
+
 function DashboardCard({ stat, onChanged }: { stat: DashboardStat; onChanged: () => void }) {
   const navigate = useNavigate();
   const { connection: conn, lastFull, todayIncrementals, runningBackup, totalBackups } = stat;
+  const openErrors = stat.recentErrors.filter(e => !e.resolved);
 
   return (
     <div className="conn-card" onClick={() => navigate(`/server/${conn.id}/dashboard`)}>
@@ -181,6 +248,12 @@ function DashboardCard({ stat, onChanged }: { stat: DashboardStat; onChanged: ()
           <div className="stat-value muted mono">{conn.host}</div>
         </div>
       </div>
+
+      {openErrors.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+          {openErrors.map(e => <ErrorRow key={e.id} connId={conn.id} error={e} />)}
+        </div>
+      )}
 
       <div className="conn-footer">
         <button className="btn btn-secondary btn-sm" onClick={e => { e.stopPropagation(); navigate(`/server/${conn.id}/backup`); }}>

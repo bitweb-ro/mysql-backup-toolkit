@@ -94,14 +94,17 @@ function NameSection({ connectionId }: { connectionId: string }) {
 
 // Opțiuni mysqldump care rezolvă probleme întâlnite pe anumite servere. Fiecare schimbare
 // cere confirmare, cu motivul, ce face opțiunea și efectele ei.
-const DUMP_OPTIONS: {
-  key: keyof DumpOptions;
+type FlagOption = 'gtidPurgedOff' | 'maxAllowedPacket';
+
+interface OptionInfo {
   title: string;
   flag: string;
   when: string;
   what: string;
   effects: string;
-}[] = [
+}
+
+const DUMP_OPTIONS: (OptionInfo & { key: FlagOption })[] = [
   {
     key: 'gtidPurgedOff',
     title: 'Fără GTID în backup',
@@ -130,30 +133,60 @@ const DUMP_OPTIONS: {
   },
 ];
 
+const IGNORE_TABLES: OptionInfo = {
+  title: 'Exclude tabele',
+  flag: '--ignore-table',
+  when: 'Doar temporar, când un tabel împiedică backup-ul full, de exemplu când serverul MySQL cade mereu la același rând '
+    + '(„Serverul MySQL a căzut în timpul backup-ului”, posibil pagină coruptă). Așa restul bazei are backup până la reparare.',
+  what: 'mysqldump sare peste rândurile tabelelor din listă și salvează doar structura lor (CREATE TABLE și triggerele), '
+    + 'deci la restaurare tabelele se creează goale.',
+  effects: 'Backup-ul full NU conține datele acestor tabele. Backup-urile incrementale conțin în continuare modificările din ele, '
+    + 'iar la restaurare un UPDATE / DELETE pe un rând care lipsește din full oprește aplicarea cu ERROR 1032. '
+    + 'După reparare, golește lista și rulează un backup full. Se aplică backup-urilor full noi.',
+};
+
+const TABLE_NAME = /^[A-Za-z0-9_$]{1,64}$/;
+const parseTables = (s: string) => [...new Set(s.split(/[\s,]+/).filter(Boolean))];
+
+type Pending = { key: FlagOption; enable: boolean } | { key: 'ignoreTables'; tables: string[] };
+
 function DumpOptionsSection({ connectionId }: { connectionId: string }) {
   const [options, setOptions] = useState<DumpOptions | null>(null);
-  const [pending, setPending] = useState<{ key: keyof DumpOptions; enable: boolean } | null>(null);
+  const [tablesInput, setTablesInput] = useState('');
+  const [pending, setPending] = useState<Pending | null>(null);
   const [saving, setSaving] = useState(false);
   const [alert, setAlert] = useState<Alert>(null);
 
   useEffect(() => {
-    api.getDumpOptions(connectionId).then(setOptions).catch(e => {
+    api.getDumpOptions(connectionId).then(r => {
+      setOptions(r);
+      setTablesInput(r.ignoreTables.join(', '));
+    }).catch(e => {
       setAlert({ type: 'error', msg: e instanceof Error ? e.message : 'Eroare la încărcare' });
     });
   }, [connectionId]);
+
+  const tables = parseTables(tablesInput);
+  const invalidTables = tables.filter(t => !TABLE_NAME.test(t));
+  const tablesChanged = !!options && tables.join(',') !== options.ignoreTables.join(',');
 
   const confirmChange = async () => {
     if (!pending) return;
     setSaving(true);
     setAlert(null);
     try {
-      const r = await api.saveDumpOptions(connectionId, { [pending.key]: pending.enable });
+      const r = await api.saveDumpOptions(connectionId,
+        pending.key === 'ignoreTables' ? { ignoreTables: pending.tables } : { [pending.key]: pending.enable });
       setOptions(r);
-      const opt = DUMP_OPTIONS.find(o => o.key === pending.key)!;
-      setAlert({
-        type: 'success',
-        msg: `„${opt.title}” ${pending.enable ? 'activată' : 'dezactivată'}. Se aplică de la următorul backup.`,
-      });
+      setTablesInput(r.ignoreTables.join(', '));
+      let msg: string;
+      if (pending.key === 'ignoreTables') {
+        msg = r.ignoreTables.length > 0 ? `Tabele excluse din backup-ul full: ${r.ignoreTables.join(', ')}.` : 'Nu mai e exclus niciun tabel.';
+      } else {
+        const opt = DUMP_OPTIONS.find(o => o.key === pending.key)!;
+        msg = `„${opt.title}” ${pending.enable ? 'activată' : 'dezactivată'}.`;
+      }
+      setAlert({ type: 'success', msg: `${msg} Se aplică de la următorul backup.` });
       setPending(null);
     } catch (e) {
       setAlert({ type: 'error', msg: e instanceof Error ? e.message : 'Eroare la salvare' });
@@ -162,7 +195,10 @@ function DumpOptionsSection({ connectionId }: { connectionId: string }) {
     }
   };
 
-  const pendingOption = pending ? DUMP_OPTIONS.find(o => o.key === pending.key)! : null;
+  const pendingOption = !pending ? null
+    : pending.key === 'ignoreTables' ? IGNORE_TABLES : DUMP_OPTIONS.find(o => o.key === pending.key)!;
+  // Pentru „Exclude tabele”, o listă nevidă = activare, o listă goală = dezactivare
+  const enabling = !pending ? false : pending.key === 'ignoreTables' ? pending.tables.length > 0 : pending.enable;
 
   return (
     <div className="card">
@@ -190,6 +226,31 @@ function DumpOptionsSection({ connectionId }: { connectionId: string }) {
               </span>
             </label>
           ))}
+          <div style={{ fontSize: 13, marginTop: 4 }}>
+            {IGNORE_TABLES.title} <span className="mono" style={{ color: 'var(--text3)' }}>{IGNORE_TABLES.flag}</span>
+            <div className="meta" style={{ marginTop: 2, whiteSpace: 'normal', lineHeight: 1.5 }}>{IGNORE_TABLES.when}</div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <input
+                type="text"
+                placeholder="ex: emails, logs (gol = toate tabelele)"
+                className={invalidTables.length > 0 ? 'input-error' : undefined}
+                value={tablesInput}
+                onChange={e => setTablesInput(e.target.value)}
+              />
+              <button
+                className="btn btn-secondary"
+                onClick={() => setPending({ key: 'ignoreTables', tables })}
+                disabled={!tablesChanged || invalidTables.length > 0}
+              >
+                Salvează
+              </button>
+            </div>
+            {invalidTables.length > 0 && (
+              <div className="meta" style={{ marginTop: 4, color: 'var(--red)', whiteSpace: 'normal' }}>
+                Nume invalid: {invalidTables.join(', ')}. Doar litere, cifre, _ și $, separate prin virgulă.
+              </div>
+            )}
+          </div>
         </>
       )}
 
@@ -198,7 +259,9 @@ function DumpOptionsSection({ connectionId }: { connectionId: string }) {
           <div className="modal" style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-title">
-                {pending.enable ? 'Activezi' : 'Dezactivezi'} „{pendingOption.title}”?
+                {pending.key === 'ignoreTables'
+                  ? (enabling ? `Excluzi din backup: ${pending.tables.join(', ')}?` : 'Incluzi din nou toate tabelele în backup?')
+                  : `${enabling ? 'Activezi' : 'Dezactivezi'} „${pendingOption.title}”?`}
               </span>
               <button className="btn btn-ghost btn-sm" onClick={() => setPending(null)} disabled={saving}>✕</button>
             </div>
@@ -207,7 +270,12 @@ function DumpOptionsSection({ connectionId }: { connectionId: string }) {
               <div><strong>Motiv — când e nevoie:</strong> {pendingOption.when}</div>
               <div><strong>Ce face:</strong> {pendingOption.what}</div>
               <div><strong>Efecte:</strong> {pendingOption.effects}</div>
-              {!pending.enable && (
+              {pending.key === 'ignoreTables' && enabling && (
+                <div className="alert error" style={{ margin: 0 }}>
+                  Backup-urile full nu vor mai conține rândurile din: {pending.tables.join(', ')}.
+                </div>
+              )}
+              {!enabling && (
                 <div className="alert error" style={{ margin: 0 }}>
                   După dezactivare, backup-urile revin la comportamentul implicit și problema descrisă mai sus poate reapărea.
                 </div>
@@ -215,8 +283,8 @@ function DumpOptionsSection({ connectionId }: { connectionId: string }) {
             </div>
             <div className="form-actions">
               <button className="btn btn-ghost" onClick={() => setPending(null)} disabled={saving}>Anulează</button>
-              <button className={`btn ${pending.enable ? 'btn-primary' : 'btn-danger'}`} onClick={confirmChange} disabled={saving}>
-                {saving ? <span className="spinner" /> : null} Confirmă {pending.enable ? 'activarea' : 'dezactivarea'}
+              <button className={`btn ${enabling ? 'btn-primary' : 'btn-danger'}`} onClick={confirmChange} disabled={saving}>
+                {saving ? <span className="spinner" /> : null} Confirmă {enabling ? 'activarea' : 'dezactivarea'}
               </button>
             </div>
           </div>

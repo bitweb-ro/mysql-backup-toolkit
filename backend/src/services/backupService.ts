@@ -82,9 +82,13 @@ function mysqlArgs(conn: Connection): string {
 export interface DumpOptions {
   gtidPurgedOff: boolean;    // --set-gtid-purged=OFF (servere cu GTID fără RELOAD / FLUSH_TABLES)
   maxAllowedPacket: boolean; // --max-allowed-packet=1G la mysqldump și la mysql (restore), pentru rânduri mari
+  ignoreTables: string[];    // --ignore-table la backup-ul full: doar structura lor (ex: tabel corupt care oprește serverul)
 }
 
-export const DEFAULT_DUMP_OPTIONS: DumpOptions = { gtidPurgedOff: false, maxAllowedPacket: false };
+export const DEFAULT_DUMP_OPTIONS: DumpOptions = { gtidPurgedOff: false, maxAllowedPacket: false, ignoreTables: [] };
+
+// Nume de tabel acceptat la „Exclude tabele” (ajunge în comanda shell, deci strict).
+export const TABLE_NAME_PATTERN = /^[A-Za-z0-9_$]{1,64}$/;
 
 const dumpOptionsKey = (connectionId: string) => `dump_options:${connectionId}`;
 
@@ -94,9 +98,12 @@ export function getDumpOptions(connectionId: string): DumpOptions {
     return {
       gtidPurgedOff: saved.gtidPurgedOff === true,
       maxAllowedPacket: saved.maxAllowedPacket === true,
+      ignoreTables: Array.isArray(saved.ignoreTables)
+        ? saved.ignoreTables.filter((t: unknown): t is string => typeof t === 'string' && TABLE_NAME_PATTERN.test(t))
+        : [],
     };
   } catch {
-    return { ...DEFAULT_DUMP_OPTIONS };
+    return { ...DEFAULT_DUMP_OPTIONS, ignoreTables: [] };
   }
 }
 
@@ -588,6 +595,19 @@ export async function validateMySQLCapabilities(
     });
   }
 
+  if (options.ignoreTables.length > 0) {
+    const found = await probe(conn, `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ${sqlStr(db)} ` +
+      `AND TABLE_NAME IN (${options.ignoreTables.map(sqlStr).join(', ')})`);
+    const missing = found.ok ? options.ignoreTables.filter(t => !found.rows.some(([n]) => n === t)) : [];
+    checks.push({
+      group: 'Configurare server', label: 'Tabele excluse din backup', status: missing.length > 0 ? 'error' : 'warn',
+      detail: `${options.ignoreTables.join(', ')} — backup-ul full conține doar structura lor, fără rânduri (tab-ul Setări → „Exclude tabele”). ` +
+        'Restaurarea incrementalelor se poate opri cu ERROR 1032 la modificările din aceste tabele.' +
+        (missing.length > 0 ? ` Nu există în baza '${db}': ${missing.join(', ')} — backup-ul full se oprește cu „Couldn't find table”.` : ''),
+      affects: ['full'],
+    });
+  }
+
   return finish();
 }
 
@@ -621,7 +641,8 @@ async function diagnoseLostConnection(conn: Connection, opId: string, startedAt:
 
   const status = await probe(conn, "SHOW GLOBAL STATUS LIKE 'Uptime'");
   if (!status.ok) {
-    log(`serverul MySQL nu mai răspunde (${status.error}) — a fost oprit sau a căzut în timpul backup-ului.`);
+    log(`serverul MySQL nu mai răspunde (${status.error}) — a fost oprit sau a căzut în timpul backup-ului. ` +
+      `Dacă se repetă la același rând, citirea lui oprește serverul (posibil pagină coruptă în ${table}).`);
     return 'serverul MySQL nu mai răspunde după eroare';
   }
   const uptime = Number(status.rows[0]?.[1] || 0);
@@ -650,7 +671,9 @@ async function diagnoseLostConnection(conn: Connection, opId: string, startedAt:
   const rowRes = await probe(conn, `SELECT ${key}, ${lenExpr} FROM ${from}${order} LIMIT ${row}, 1`);
   if (!rowRes.ok) {
     log(`citirea rândului ${row + 1} eșuează și separat (${rowRes.error}) — posibil tabel corupt. ` +
-      `Verifică jurnalul de erori MySQL și rulează CHECK TABLE ${from};`);
+      'Verifică jurnalul de erori MySQL la ora erorii. Nu rula CHECK TABLE / ALTER TABLE pe producție fără o fereastră de ' +
+      `mentenanță: când InnoDB găsește o pagină coruptă, oprește serverul. Până la reparare, exclude tabelul ${table} ` +
+      'din backup (tab-ul Setări → „Exclude tabele”).');
     return `citirea rândului ${row + 1} din ${table} eșuează pe server (posibil tabel corupt)`;
   }
   if (rowRes.rows.length === 0) {
@@ -723,12 +746,24 @@ export async function performFullBackup(
       options.maxAllowedPacket ? MAX_PACKET_FLAG : '',
     ].filter(Boolean).join(' ');
     if (extraFlags) appendLog(opId, `Opțiuni mysqldump active (din Setări): ${extraFlags}`);
+    const ignored = options.ignoreTables;
+    if (ignored.length > 0) {
+      appendLog(opId, `ATENȚIE: tabele excluse din backup (din Setări): ${ignored.join(', ')} — se salvează doar structura lor, fără rânduri.`);
+    }
+    const ignoreFlags = ignored.map(t => `--ignore-table=${conn.database_name}.${t}`).join(' ');
 
     appendLog(opId, `Rulare mysqldump pentru baza '${conn.database_name}'...`);
     // --no-tablespaces avoids "Access denied" on PROCESS privilege for tablespace dump (MySQL 8.0.21+)
     // --column-statistics=0: pe MariaDB, mysqldump 8.0 se oprește după primul tabel (cod 2,
     // „Unknown table 'COLUMN_STATISTICS'”); pe MySQL omite doar histogramele (ANALYZE TABLE).
-    const cmd = `mysqldump ${args} --single-transaction --no-tablespaces --column-statistics=0 --routines --triggers --events ${extraFlags} ${conn.database_name} | gzip > "${filePath}"`;
+    const base = `mysqldump ${args} --single-transaction --no-tablespaces --column-statistics=0`;
+    let dump = `${base} --routines --triggers --events ${extraFlags} ${ignoreFlags} ${conn.database_name}`;
+    // Structura tabelelor excluse (CREATE TABLE + triggere, fără rânduri) se adaugă la final, ca restaurarea
+    // să le creeze goale. Fără GTID aici: dump-ul principal a scris deja GTID_PURGED (dacă e cazul).
+    if (ignored.length > 0) {
+      dump = `{ ${dump} && ${base} --no-data --set-gtid-purged=OFF ${conn.database_name} ${ignored.join(' ')}; }`;
+    }
+    const cmd = `${dump} | gzip > "${filePath}"`;
     await execPipe(cmd, env, opId);
 
     const stat = fs.statSync(filePath);
@@ -742,6 +777,7 @@ export async function performFullBackup(
     }
 
     appendLog(opId, `Backup finalizat. Dimensiune: ${formatBytes(stat.size)}`);
+    if (ignored.length > 0) appendLog(opId, `ATENȚIE: backup fără rândurile din: ${ignored.join(', ')} (excluse din Setări).`);
     appendLog(opId, `Fișier: ${fileName}`);
 
     return {
@@ -815,6 +851,12 @@ export async function performIncrementalBackup(
 
     appendLog(opId, `Conectare la ${conn.host}:${conn.port}...`);
     appendLog(opId, `Binlog de referință: ${lastBinlogFile}:${lastBinlogPos}`);
+    const ignored = getDumpOptions(conn.id).ignoreTables;
+    if (ignored.length > 0) {
+      // mysqlbinlog filtrează doar pe bază, nu pe tabel
+      appendLog(opId, `ATENȚIE: binlog-ul conține și modificările din tabelele excluse din backup-ul full (${ignored.join(', ')}). ` +
+        'La restaurare, un UPDATE / DELETE pe un rând care lipsește din full oprește aplicarea cu ERROR 1032.');
+    }
 
     await execAsync(`mysql ${args} -e "FLUSH LOGS;"`, { env });
     appendLog(opId, 'FLUSH LOGS executat — binlog curent rotit pentru a delimita intervalul.');

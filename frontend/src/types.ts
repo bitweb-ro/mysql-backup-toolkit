@@ -54,6 +54,18 @@ export interface DashboardStat {
   runningBackup: { id: string; type: string } | null;
   totalBackups: number;
   lastBackupAt: string | null;
+  recentErrors: RecentError[];
+}
+
+// Backup eșuat sau upload eșuat, din ultimele 7 zile (max. 2 per server).
+export interface RecentError {
+  id: string;
+  type: 'full' | 'incremental';
+  status: 'running' | 'success' | 'failed';
+  error_message?: string | null;
+  storage_error?: string | null;
+  started_at: string;
+  resolved: boolean;
 }
 
 export interface BackupFile {
@@ -99,6 +111,7 @@ export interface StorageConfig {
     username: string;
     password: string;
     secure: boolean;
+    allowSelfSigned: boolean;
     remoteDir: string;
   };
   s3?: {
@@ -162,4 +175,5 @@ export interface ValidationResult {
 export interface DumpOptions {
   gtidPurgedOff: boolean;
   maxAllowedPacket: boolean;
+  ignoreTables: string[];
 }

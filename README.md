@@ -91,6 +91,8 @@ Click pe un server (în sidebar sau în Dashboard) deschide pagina lui, cu tab-u
 
 Lista de servere (sidebar și Dashboard) se actualizează imediat după adăugare, editare, ștergere sau import, fără refresh.
 
+**Ultimele erori** (Dashboard-ul general, sub „Spațiu disc backup-uri”): backup-urile eșuate și upload-urile eșuate pe destinația remote din ultimele 7 zile, de la toate serverele (max. 2 per server, cele mai noi 10 în total), cu numele serverului, tipul (full / incremental), mesajul și când s-a întâmplat. O eroare e marcată „rezolvat” dacă după ea a urmat un backup reușit de același tip, cu upload reușit. Erorile nerezolvate apar și în cardul serverului lor. Click pe o eroare deschide jurnalul backup-ului, cu explicația cauzei.
+
 ### Restaurare de verificare (în altă bază)
 
 În tab-ul **↩ Restore**, la „Destinație”, alegi „Altă bază de date, pe același server”. Backup-ul full se restaurează în baza indicată (implicit `<baza>_verificare`), iar baza originală nu se modifică. Așa poți verifica un backup sau vedea ce date erau la acel moment.
@@ -139,7 +141,7 @@ Backup-urile pot fi trimise, pe lângă disc, pe o destinație remote:
 
 - **Local**: implicit, doar folderul `backup_servers/`.
 - **SFTP / SSH**: autentificare cu parolă sau cheie privată (OpenSSH/PEM, opțional cu passphrase).
-- **FTP / FTPS**: FTPS = TLS explicit, recomandat (FTP simplu trimite parola necriptat).
+- **FTP / FTPS**: FTPS = TLS explicit, recomandat (FTP simplu trimite parola necriptat). Pentru servere cu certificat self-signed (ex: Synology cu certificatul implicit) bifează „Acceptă certificat self-signed”: conexiunea rămâne criptată, dar identitatea serverului nu mai e verificată, deci folosește-o doar în rețea internă. „Director remote” (SFTP și FTP) e obligatoriu și nu poate fi „/”. Subfolderele lipsă din el se creează automat. Pe Synology, primul nivel trebuie să fie un shared folder existent (ex: `/backup-databases-mysql` sau `/backup-databases-mysql/productie`): în rădăcina `/` nu se poate scrie și shared folder-ele nu se pot crea prin FTP.
 - **S3**: AWS S3 sau orice serviciu S3-compatibil (MinIO, Backblaze B2, Hetzner, Wasabi etc.) prin câmpul „Endpoint”. Bifa „Path-style URL” e necesară pentru MinIO și unii furnizori.
 
 Configurare:
@@ -210,10 +212,13 @@ Tab-ul **⚙️ Setări** → „Opțiuni mysqldump”. Implicit sunt dezactivat
 
 - **Fără GTID în backup** (`--set-gtid-purged=OFF`): pentru servere cu GTID activ unde user-ul nu are `RELOAD` / `FLUSH_TABLES` (MySQL administrat: DigitalOcean, AWS RDS, Azure). Simptom: „Couldn't execute 'FLUSH TABLES': Access denied … RELOAD or FLUSH_TABLES”. Dump-ul nu mai conține `SET @@GLOBAL.GTID_PURGED`, deci restaurarea pe un server cu GTID nu mai dă eroarea 3546.
 - **Rânduri mari** (`--max-allowed-packet=1G`, la backup și la restaurare): ridică limita clientului (24 MB mysqldump, 16 MB mysql). Necesară doar dacă jurnalul arată „Error 2020: Got packet bigger than max_allowed_packet”. Nu rezolvă „Error 2013: Lost connection … at row: N”: în teste pe MySQL 8.0.46 și 8.4, mysqldump citește rânduri de 30 MB indiferent de `max_allowed_packet` (client sau server). Nu schimbă nimic pe serverul MySQL.
+- **Exclude tabele** (`--ignore-table`, doar la backup-ul full): listă de tabele, separate prin virgulă, ale căror rânduri nu intră în backup. Se salvează doar structura lor (`CREATE TABLE` și triggerele), deci la restaurare se creează goale. E o soluție temporară, de exemplu când serverul MySQL cade mereu la același rând dintr-un tabel (pagină coruptă), ca restul bazei să aibă backup până la reparare. Jurnalul fiecărui backup full și „Testează drepturile și configurațiile” arată tabelele excluse; un tabel inexistent oprește backup-ul („Couldn't find table”). Backup-urile incrementale conțin în continuare modificările din aceste tabele (mysqlbinlog filtrează doar pe bază), iar la restaurare un `UPDATE` / `DELETE` pe un rând care lipsește din full oprește aplicarea cu `ERROR 1032`. După reparare, golește lista și rulează un backup full.
 
 `max_allowed_packet` al **serverului destinație** contează doar la restaurare: un rând mai mare dă `ERROR 1153` și limita se mărește pe server (`SET GLOBAL max_allowed_packet = 1073741824;` și `max_allowed_packet = 1G` în my.cnf, la `[mysqld]`).
 
-**Error 2013 la backup** („Lost connection … when dumping table X at row: N”): după eroare, aplicația verifică automat cauza și o scrie în jurnal (liniile `DIAGNOSTIC:`): dacă serverul MySQL a repornit sau nu mai răspunde, dacă rândul la care s-a oprit dump-ul se poate citi separat (dacă nu, posibil tabel corupt), mărimea lui și a celui mai mare rând din tabel. Dacă serverul nu a repornit și rândul se citește normal, conexiunea a fost tăiată din afară: firewall / IPS / antivirus de rețea, `net_write_timeout` mic, rețea instabilă. Cauza exactă e în jurnalul de erori MySQL al serverului, la ora erorii.
+**Error 2013 la backup** („Lost connection … when dumping table X at row: N”): după eroare, aplicația verifică automat cauza și o scrie în jurnal (liniile `DIAGNOSTIC:`): dacă serverul MySQL a repornit sau nu mai răspunde, dacă rândul la care s-a oprit dump-ul se poate citi separat (dacă nu, posibil tabel corupt), mărimea lui și a celui mai mare rând din tabel. Dacă serverul nu a repornit și rândul se citește normal, conexiunea a fost tăiată din afară: firewall / IPS / antivirus de rețea, `net_write_timeout` mic, rețea instabilă. Cauza exactă e în jurnalul de erori MySQL al serverului, la ora erorii (orele din jurnalul aplicației sunt UTC).
+
+Dacă serverul MySQL **nu mai răspunde** după eroare („Can't connect … (111)”) și se întâmplă mereu la același rând, citirea acelui rând oprește serverul, aproape sigur din cauza unei pagini InnoDB corupte. În jurnalul de erori MySQL apar „Database page corruption” sau „Assertion failure”. Până la reparare, folosește opțiunea **Exclude tabele** pentru tabelul respectiv. Nu rula `CHECK TABLE` / `ALTER TABLE` pe el în producție fără o fereastră de mentenanță: când InnoDB găsește o pagină coruptă, oprește serverul intenționat.
 
 Mereu active: `--single-transaction --no-tablespaces --column-statistics=0 --routines --triggers --events`. `--column-statistics=0` e necesar pentru MariaDB: fără el, mysqldump 8.0 se oprește după primul tabel.
 
